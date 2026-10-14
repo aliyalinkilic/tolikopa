@@ -235,14 +235,63 @@ function SidebarContent({
               {!collapsed && <span>{t('shell.collapse')}</span>}
             </button>
           )}
-          {!collapsed && pub?.version && (
-            <p className="tabular mt-1 truncate px-3 text-[11px] text-text-dim" title={t('shell.version', { version: pub.version })}>
-              {t('shell.version', { version: pub.version })}
-            </p>
-          )}
+          {!collapsed && pub?.version && <VersionLine version={pub.version} />}
         </div>
       )}
     </>
+  )
+}
+
+/** The product version, and how much of the Windows fleet runs the agent build
+ *  this server ships — a small ring + percentage. Admins can click through to
+ *  the Setup page, where tolikopa-update lives. */
+function VersionLine({ version }: { version: string }) {
+  const t = useT()
+  const isAdmin = useIsAdmin()
+  const { data } = useFleetSummary()
+  const u = data?.agent_update
+  const pct = u && u.total > 0 ? Math.round((u.current / u.total) * 100) : null
+  const tone = pct === null ? '' : pct >= 90 ? 'text-ok' : pct >= 60 ? 'text-warn' : 'text-crit'
+  const r = 5
+  const c = 2 * Math.PI * r
+
+  const badge =
+    pct !== null && u ? (
+      <span
+        className={cn('inline-flex shrink-0 items-center gap-1.5', tone)}
+        title={t('shell.agentsCurrentTitle', { current: u.current, total: u.total, version: u.version })}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden className="-rotate-90">
+          <circle cx="6" cy="6" r={r} fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2" />
+          <circle
+            cx="6"
+            cy="6"
+            r={r}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeDasharray={`${(c * pct) / 100} ${c}`}
+          />
+        </svg>
+        <span className="tabular font-medium">{t('shell.agentsCurrent', { pct })}</span>
+      </span>
+    ) : null
+
+  return (
+    <div className="mt-1 flex items-center justify-between gap-2 px-3 text-[11px] text-text-dim">
+      <span className="tabular truncate" title={t('shell.version', { version })}>
+        {t('shell.version', { version })}
+      </span>
+      {badge &&
+        (isAdmin ? (
+          <Link to="/setup" className="rounded-full ring-focus hover:opacity-80">
+            {badge}
+          </Link>
+        ) : (
+          badge
+        ))}
+    </div>
   )
 }
 

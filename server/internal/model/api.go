@@ -223,6 +223,17 @@ type FleetSummary struct {
 	AlertsBySeverity map[string]int `json:"alerts_by_severity"`
 	AvgCPU           float64        `json:"avg_cpu"`
 	AvgMem           float64        `json:"avg_mem"`
+	// AgentUpdate is how many Windows PCs run the agent build this server
+	// ships. Omitted when the server has no build artifacts to compare with.
+	AgentUpdate *AgentUpdateSummary `json:"agent_update,omitempty"`
+}
+
+// AgentUpdateSummary compares the fleet's agents with the server's build.
+// Linux hosts are not counted: tolikopa-update.exe does not update them.
+type AgentUpdateSummary struct {
+	Version string `json:"version"` // the agent version the server ships
+	Current int    `json:"current"` // Windows PCs running exactly that version
+	Total   int    `json:"total"`   // Windows PCs (not archived)
 }
 
 // ── Homepage dashboard: fleet overview + stats (docs/API.md §3 / §9) ───────────

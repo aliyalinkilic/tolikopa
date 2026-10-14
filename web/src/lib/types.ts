@@ -189,6 +189,9 @@ export interface FleetSummary {
   avg_cpu: number
   /** PERCENT 0..100 here — unlike FleetOverview.avg_mem, which is a 0..1 ratio. */
   avg_mem: number
+  /** Windows PCs running the agent build this server ships. Absent when the
+   *  server has no build to compare with. Linux hosts are not counted. */
+  agent_update?: { version: string; current: number; total: number }
 }
 
 // ── Fleet overview dashboard (GET /api/fleet/overview) ─────────────────────────

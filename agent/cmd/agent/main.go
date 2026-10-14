@@ -26,7 +26,9 @@ import (
 	"github.com/aliyalinkilic/tolikopa/agent/internal/service"
 )
 
-// version is overridable at build time: -ldflags "-X main.version=1.2.3".
+// version is stamped from the repository's VERSION file at image build time
+// (-ldflags "-X main.version=..."). This default only serves local builds and a
+// test keeps it equal to VERSION.
 var version = "2.0.1"
 
 func main() {

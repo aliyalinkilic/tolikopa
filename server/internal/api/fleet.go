@@ -77,6 +77,9 @@ func (a *API) FleetSummary(c echo.Context) error {
 	now := time.Now()
 	warn := a.cfg.OfflineWarn()
 	sum := model.FleetSummary{AlertsBySeverity: map[string]int{}}
+	if info, err := a.arts.Info(); err == nil && info != nil && info.AgentVersion != "" {
+		sum.AgentUpdate = &model.AgentUpdateSummary{Version: normVersion(info.AgentVersion)}
+	}
 	var cpuSum, memSum float64
 	var onlineCount int
 	for rows.Next() {
@@ -85,6 +88,12 @@ func (a *API) FleetSummary(c echo.Context) error {
 			return serverError(err)
 		}
 		sum.Total++
+		if u := sum.AgentUpdate; u != nil && fm.Kind != "linux" {
+			u.Total++
+			if normVersion(fm.AgentVersion) == u.Version {
+				u.Current++
+			}
+		}
 		if fm.Online {
 			sum.Online++
 			cpuSum += fm.CPUPct

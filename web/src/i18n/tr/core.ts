@@ -120,6 +120,8 @@ export const shell = {
   profile: 'Profilim',
   signOut: 'Çıkış Yap',
   version: 'Sürüm {version}',
+  agentsCurrent: '%{pct} güncel',
+  agentsCurrentTitle: '{total} Windows bilgisayardan {current} tanesi sunucudaki ajan sürümünü ({version}) çalıştırıyor',
   notFoundTitle: 'Sayfa bulunamadı',
   notFoundBody: 'Aradığınız sayfa taşınmış veya hiç var olmamış olabilir.',
   backHome: 'Panele Dön',

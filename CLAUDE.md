@@ -79,6 +79,9 @@ sudo ./setup.sh                                # full stack on Ubuntu (needs Doc
 - Agent changes: run `go vet` with **both** `GOOS=windows` and `GOOS=linux` — half the agent is
   behind `//go:build windows`. Two tests (`internal/config` TestNewLoggerWritesToFile,
   `internal/policy` TestStoreRoundTrip) fail on Windows for environmental reasons; pre-existing.
+- **Versions:** the root `VERSION` file is the single source; the image build stamps it into the
+  server, the setup tool and the agent. Bump it for a release; `agent/cmd/agent/main.go`'s default
+  must equal it (a test checks).
 - `agent/dist/`: `tolikopa-agent.exe` is the shippable build (the name `bootstrap.ps1` expects in
   `NETLOGON\Tolikopa`), `tolikopa-agent-prev.exe` the previous one for rollback. Rotate before
   building a new one.

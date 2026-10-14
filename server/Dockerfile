@@ -23,6 +23,10 @@ FROM ${GO_IMAGE} AS artifacts
 ENV CGO_ENABLED=0 GOFLAGS=-mod=readonly GOTOOLCHAIN=local
 WORKDIR /src
 
+# VERSION (repo root) is the single source of every version number: product,
+# server, setup tool and agent. It is stamped into each binary below.
+COPY VERSION ./VERSION
+RUN grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' VERSION
 COPY agent/go.mod agent/go.sum ./agent/
 RUN cd agent && go mod download && go mod verify
 COPY agent/ ./agent/
@@ -35,18 +39,15 @@ COPY agent/ ./agent/
 # input is the committed winres/winres.json; only the version comes from here.
 # Same input, same .syso: the generation is deterministic.
 ARG GO_WINRES=github.com/tc-hib/go-winres@v0.3.3
-RUN AGENT_VERSION="$(sed -n 's/^var version = "\(.*\)"$/\1/p' agent/cmd/agent/main.go)" \
- && test -n "$AGENT_VERSION" \
- && cd agent/cmd/agent \
+RUN cd agent/cmd/agent \
  && go run "$GO_WINRES" make --in winres/winres.json --arch amd64 \
-      --product-version "$AGENT_VERSION" --file-version "$AGENT_VERSION" \
+      --product-version "$(cat /src/VERSION)" --file-version "$(cat /src/VERSION)" \
  && test -f rsrc_windows_amd64.syso
 RUN cd agent \
- && GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o /out/tolikopa-agent.exe ./cmd/agent \
- && GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o /out/tolikopa-agent     ./cmd/agent
+ && GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$(cat ../VERSION)" -o /out/tolikopa-agent.exe ./cmd/agent \
+ && GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$(cat ../VERSION)" -o /out/tolikopa-agent     ./cmd/agent
 
 # The rollout tool is stdlib-only (go.mod without requires, hence no go.sum).
-COPY VERSION ./VERSION
 COPY setup/ ./setup/
 RUN cd setup/cmd/tolikopa-setup \
  && go run "$GO_WINRES" make --in winres/winres.json --arch amd64 \
@@ -56,11 +57,8 @@ RUN cd setup && GOOS=windows GOARCH=amd64 go build -trimpath \
       -ldflags "-s -w -X main.version=$(cat ../VERSION)" -o /out/tolikopa-setup.exe ./cmd/tolikopa-setup
 
 COPY deploy/gpo/bootstrap.ps1 /out/bootstrap.ps1
-# The agent's version is the default compiled into cmd/agent/main.go.
-RUN AGENT_VERSION="$(sed -n 's/^var version = "\(.*\)"$/\1/p' agent/cmd/agent/main.go)" \
- && test -n "$AGENT_VERSION" \
- && printf '{"product_version":"%s","agent_version":"%s","built_at":"%s"}\n' \
-      "$(cat VERSION)" "$AGENT_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /out/artifacts.json
+RUN printf '{"product_version":"%s","agent_version":"%s","built_at":"%s"}\n' \
+      "$(cat VERSION)" "$(cat VERSION)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /out/artifacts.json
 
 # ── Server ─────────────────────────────────────────────────────────────────────
 FROM ${GO_IMAGE} AS build

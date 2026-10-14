@@ -288,7 +288,7 @@ All endpoints below require the session cookie. Those that require `role=admin` 
 | Endpoint | Parameters | Response |
 |----|--------------|-------|
 | `GET /api/fleet` | `status=online\|offline`, `user=`, `q=` (hostname / machine id substring), `tag=` (machine group tag) | `FleetMachine[]` |
-| `GET /api/fleet/summary` | — | `FleetSummary` (online/offline/active/**idle** counts, alert distribution keyed by `warning`/`critical`, `avg_cpu` 0-100, `avg_mem` **percent 0-100** — unlike `FleetOverview.avg_mem`, which is a 0-1 ratio) |
+| `GET /api/fleet/summary` | — | `FleetSummary` (online/offline/active/**idle** counts, alert distribution keyed by `warning`/`critical`, `avg_cpu` 0-100, `avg_mem` **percent 0-100** — unlike `FleetOverview.avg_mem`, which is a 0-1 ratio; `agent_update {version,current,total}`: Windows PCs running the agent build this server ships, omitted without build artifacts, Linux not counted) |
 | `GET /api/fleet/overview` | — | `FleetOverview` (home dashboard; see below) |
 
 `FleetMachine`: `{machine_id,hostname,kind,online,cpu_pct,mem_ratio,disk_min_free_pct,logon_user,

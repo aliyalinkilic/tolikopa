@@ -123,6 +123,8 @@ export const shell: Shape<typeof tr.shell> = {
   profile: 'My Profile',
   signOut: 'Sign Out',
   version: 'Version {version}',
+  agentsCurrent: '{pct}% up to date',
+  agentsCurrentTitle: '{current} of {total} Windows PCs run the agent build this server ships ({version})',
   notFoundTitle: 'Page not found',
   notFoundBody: 'The page you are looking for may have moved or never existed.',
   backHome: 'Back to Overview',
