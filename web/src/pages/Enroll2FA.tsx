@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { LogOut, ShieldCheck, User } from 'lucide-react'
-import { LogoMark, useBrandSubtitle } from '@/components/Logo'
+import { LogoMark, Wordmark, useBrandSubtitle } from '@/components/Logo'
 import { LanguagePicker, ThemePicker } from '@/components/PrefControls'
 import { TwoFactorSetup } from '@/components/TwoFactorSetup'
 import { ToastHost } from '@/components/Toast'
@@ -38,7 +38,7 @@ export function Enroll2FA() {
         <div className="flex min-w-0 items-center gap-2.5">
           <LogoMark size={30} />
           <div className="min-w-0 leading-none">
-            <div className="text-[18px] font-bold tracking-[-0.02em] text-text">{t('common.appName')}</div>
+            <Wordmark className="block text-[18px]" />
             <div className="mt-0.5 truncate text-[10px] font-medium uppercase tracking-[0.22em] text-text-dim">{brand}</div>
           </div>
         </div>

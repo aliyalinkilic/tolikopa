@@ -29,7 +29,8 @@ mem** · logged-on **username** · session state (active/idle/locked/…) · **s
 keyboard/mouse input (a duration only) · foreground app **base name + duration** · disk SMART
 health · app-crash events (faulting app **base name** + exception code + time) · presence of
 **compiled-catalog** hygiene items only · the machine's **own local IPv4 addresses** (read from
-interface configuration).
+interface configuration) · OS/CPU/RAM identity · battery state · Windows Update counts and times
+(never update titles or KB numbers).
 
 **Forbidden — never collect, transmit, log or store:** screen contents/screenshots · keystrokes ·
 mouse coordinates · window titles or foreground-window text · URLs, browser history · DNS queries,

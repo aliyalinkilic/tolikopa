@@ -153,8 +153,8 @@ func (a *API) CreatePanelUser(c echo.Context) error {
 		Role        string `json:"role"`
 		DisplayName string `json:"display_name"`
 	}
-	if err := c.Bind(&body); err != nil {
-		return apierr.BadRequest("invalid request body")
+	if err := apierr.Bind(c, &body); err != nil {
+		return err
 	}
 	body.Username = strings.TrimSpace(body.Username)
 	if !validUsername(body.Username) {
@@ -214,8 +214,11 @@ func (a *API) PatchPanelUser(c echo.Context) error {
 		Disabled    *bool   `json:"disabled"`
 		DisplayName *string `json:"display_name"`
 	}
-	if err := c.Bind(&body); err != nil {
-		return apierr.BadRequest("invalid request body")
+	if err := apierr.Bind(c, &body); err != nil {
+		return err
+	}
+	if body.Role == nil && body.Disabled == nil && body.DisplayName == nil {
+		return apierr.BadRequest("no field to change in request body")
 	}
 	if body.Role != nil && !validRole(*body.Role) {
 		return apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
@@ -291,8 +294,8 @@ func (a *API) ResetPanelUserPassword(c echo.Context) error {
 	var body struct {
 		NewPassword string `json:"new_password"`
 	}
-	if err := c.Bind(&body); err != nil {
-		return apierr.BadRequest("invalid request body")
+	if err := apierr.Bind(c, &body); err != nil {
+		return err
 	}
 	username := usernameParam(c)
 	actor, actorID := actorOf(c)

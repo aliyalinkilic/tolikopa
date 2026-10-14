@@ -5,6 +5,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -138,7 +139,33 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	cfg.applyDefaults()
+	if err := ValidateBackendURL(cfg.BackendURL); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// ValidateBackendURL refuses any backend_url that is not an absolute https://
+// URL with a host. Every request carries the ingest token as a bearer header,
+// so an http:// URL — whether mistyped or planted in an edited config.json —
+// would hand the token (and the telemetry) to anyone on the path in cleartext.
+// There is deliberately no opt-out. Userinfo is refused too: credentials have
+// no place in this URL and would end up in logs.
+func ValidateBackendURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("config: backend_url is not a valid URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("config: backend_url must use https:// (got scheme %q); plain http would send the ingest token in cleartext", u.Scheme)
+	}
+	if u.Host == "" || u.Hostname() == "" {
+		return fmt.Errorf("config: backend_url has no host")
+	}
+	if u.User != nil {
+		return fmt.Errorf("config: backend_url must not contain user credentials")
+	}
+	return nil
 }
 
 // switchKeys are the local opt-ins for endpoint hygiene.

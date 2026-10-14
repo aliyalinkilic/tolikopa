@@ -3,6 +3,7 @@ package sender
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -113,8 +114,19 @@ func (s *Sender) drainSpool() error {
 				remaining = append(remaining, lines[i:]...)
 				s.rewriteSpool(f, remaining)
 				return fmt.Errorf("spool resend status %d", status)
+			case status == http.StatusRequestEntityTooLarge:
+				// Typically a batch spooled by an older build without the agent-side
+				// caps. Re-split it (fresh batch ids, original machine identity,
+				// still applyPolicy=false) instead of discarding all of it.
+				s.logReject(status, "spooled batch rejected as too large (413), splitting")
+				if serr := s.sendSplit(partsOf(env), false, 0); serr != nil {
+					// Undelivered halves were spooled as new files by sendSplit.
+					remaining = append(remaining, lines[i+1:]...)
+					s.rewriteSpool(f, remaining)
+					return serr
+				}
 			default: // 4xx: poison, drop
-				s.log.Error("spooled batch rejected (4xx), dropping", "status", status)
+				s.logReject(status, "spooled batch rejected (4xx), dropping")
 			}
 		}
 		os.Remove(f) // all lines consumed

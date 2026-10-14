@@ -332,7 +332,39 @@ func (h *Hub) tickFleet(ctx context.Context) {
 			Type:    "fleet.update",
 			Payload: map[string]any{"machines": changed},
 		})
+		// Per-machine channel (docs/API.md §8): the machine page subscribes to
+		// "machine:<id>" for its live CPU/RAM strip. Only sent when someone is
+		// subscribed to that machine, so the fan-out stays proportional to viewers.
+		for _, fm := range changed {
+			ch := "machine:" + fm.MachineID
+			if !h.hasSubscriber(ch) {
+				continue
+			}
+			h.Broadcast(ch, metricMessage(fm))
+		}
 	}
+}
+
+// metricMessage builds the machine.metric push for one fleet row.
+func metricMessage(fm model.FleetMachine) model.WSMessage {
+	return model.WSMessage{Type: "machine.metric", Payload: model.MachineMetricPush{
+		MachineID: fm.MachineID, T: fm.LastSeen, CPUPct: fm.CPUPct, MemRatio: fm.MemRatio,
+	}}
+}
+
+// hasSubscriber reports whether any connected client listens on channel.
+func (h *Hub) hasSubscriber(channel string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for cl := range h.clients {
+		cl.mu.Lock()
+		ok := cl.subs[channel]
+		cl.mu.Unlock()
+		if ok {
+			return true
+		}
+	}
+	return false
 }
 
 // scanFleet scans one machine_live+machine row into a FleetMachine and returns a

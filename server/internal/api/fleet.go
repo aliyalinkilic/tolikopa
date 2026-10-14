@@ -91,11 +91,14 @@ func (a *API) FleetSummary(c echo.Context) error {
 			memSum += fm.MemRatio
 			onlineCount++
 			// "idle" (logged on + unlocked, no input >= 5 min) is its own state:
-			// it never counts as active.
-			switch fm.SessionState {
-			case "active":
+			// it never counts as active. A Linux host is a headless server whose
+			// "active" only means an SSH/logind session exists, not that a person
+			// is using a PC, so it is not counted as in use.
+			switch {
+			case fm.Kind == "linux":
+			case fm.SessionState == "active":
 				sum.Active++
-			case "idle":
+			case fm.SessionState == "idle":
 				sum.Idle++
 			}
 		} else {

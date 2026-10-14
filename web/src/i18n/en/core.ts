@@ -7,7 +7,7 @@ import type { Shape } from '../plural'
 import type * as tr from '../tr/core'
 
 export const common: Shape<typeof tr.common> = {
-  appName: 'Tolikopa',
+  appName: 'ToliKOPA',
   tagline: 'IT Fleet Monitoring',
   loading: 'Loading…',
   save: 'Save',

@@ -93,14 +93,17 @@ export function useMachine(id: string | undefined) {
 }
 
 /**
- * Sets a machine's group tags (admin). Sends BOTH labels and tags so the labels
- * blob is never clobbered — pass the machine's current labels (or {} if unknown).
+ * Sets a machine's group tags (admin). The server keeps whichever of
+ * `labels` / `tags` is omitted, so `labels` is only sent when given.
  */
 export function useUpdateMachineTags() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, labels, tags }: { id: string; labels: Record<string, unknown>; tags: string[] }) =>
-      api.put<void>(`/api/admin/machines/${encodeURIComponent(id)}/labels`, { labels, tags }),
+    mutationFn: ({ id, labels, tags }: { id: string; labels?: Record<string, unknown>; tags: string[] }) =>
+      api.put<{ labels: Record<string, unknown>; tags: string[] }>(
+        `/api/admin/machines/${encodeURIComponent(id)}/labels`,
+        labels === undefined ? { tags } : { labels, tags },
+      ),
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['fleet'] })
       qc.invalidateQueries({ queryKey: ['machine', id] })
@@ -580,8 +583,17 @@ export function useRemediationImpact(days: number) {
 export function useUpdateRemediationPolicy() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (policy: RemediationPolicyUpdate) =>
-      api.put<RemediationPolicy>('/api/admin/remediation/policy', policy),
+    // The admin API returns `revision` as a NUMBER; the panel's RemediationPolicy
+    // (like normalizeOverview) speaks string. Handing the raw number to the draft
+    // made every successful save compare 7 !== "7" and raise the "changed by
+    // someone else" banner.
+    mutationFn: async (policy: RemediationPolicyUpdate): Promise<RemediationPolicy> => {
+      const saved = await api.put<Omit<RemediationPolicy, 'revision'> & { revision: number | string }>(
+        '/api/admin/remediation/policy',
+        policy,
+      )
+      return { ...saved, revision: String(saved.revision) }
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'remediation'] })
     },

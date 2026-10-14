@@ -103,7 +103,10 @@ func (a *API) SlowMachines(c echo.Context) error {
 		LEFT JOIN disk  d ON d.machine_id = m.machine_id
 		LEFT JOIN crash c ON c.machine_id = m.machine_id
 		LEFT JOIN smart s ON s.machine_id = m.machine_id
-		WHERE ml.ts >= now() - make_interval(days => $1) AND m.archived_at IS NULL`, days)
+		WHERE ml.ts >= now() - make_interval(days => $1) AND m.archived_at IS NULL
+		  -- The score is tuned for user PCs (Windows 11 RAM floor, "reboot it"
+		  -- uptime penalty); a Linux server's long uptime is health, not slowness.
+		  AND m.kind <> 'linux'`, days)
 	if err != nil {
 		return serverError(err)
 	}

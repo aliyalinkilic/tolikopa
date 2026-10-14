@@ -258,9 +258,13 @@ func (a *API) GetSetup(c echo.Context) error {
 	}
 	out.Fleet.ByAgentVersion = []model.AgentVersionCount{}
 
+	// Windows machines only: tolikopa-update.exe and the NETLOGON payload update
+	// the Windows agent, so a Linux host (the server monitoring itself, updated
+	// separately) can neither be brought "current" by it nor should it raise the
+	// update banner.
 	rows, err := a.pool.Query(ctx, `
 		SELECT COALESCE(agent_version, ''), count(*)::int
-		FROM machine WHERE archived_at IS NULL
+		FROM machine WHERE archived_at IS NULL AND kind <> 'linux'
 		GROUP BY 1 ORDER BY 2 DESC, 1`)
 	if err != nil {
 		return serverError(err)
@@ -300,8 +304,8 @@ func (a *API) PutSetupConfig(c echo.Context) error {
 		GPOName           *string `json:"gpo_name"`
 		DefenderExclusion *bool   `json:"defender_exclusion"`
 	}
-	if err := c.Bind(&body); err != nil {
-		return apierr.BadRequest("invalid request body")
+	if err := apierr.Bind(c, &body); err != nil {
+		return err
 	}
 	// A body naming none of the fields (e.g. wrapped in another object) would
 	// otherwise "succeed" while changing nothing.

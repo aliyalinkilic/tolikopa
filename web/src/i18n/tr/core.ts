@@ -4,7 +4,7 @@
 // states and aria-labels.
 
 export const common = {
-  appName: 'Tolikopa',
+  appName: 'ToliKOPA',
   tagline: 'BT Filo İzleme',
   loading: 'Yükleniyor…',
   save: 'Kaydet',

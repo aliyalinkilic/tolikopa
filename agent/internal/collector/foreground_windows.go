@@ -54,11 +54,7 @@ func ForegroundAppName() (name string, ok bool) {
 	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &size); err != nil {
 		return "", false
 	}
-	name = normalizeProcName(filepath.Base(windows.UTF16ToString(buf[:size])))
-	if name == "" {
-		return "", false
-	}
-	return name, true
+	return ValidAppName(filepath.Base(windows.UTF16ToString(buf[:size])))
 }
 
 // IdleSeconds returns seconds since the last keyboard/mouse input in the calling

@@ -7,7 +7,9 @@
       preflight  read-only checks, prints what it found
       protect    restrict the NETLOGON folder to computer accounts and admins
       dns        make the panel's name resolve: an A record in the zone that holds
-                 it, or a new AD-integrated zone of that name; never overwrites
+                 it, or - only with -NewZone allow, which the exe passes after the
+                 admin typed the zone name - a new AD-integrated zone of that
+                 name; never overwrites
       apply      create (or reuse) the GPO, publish the scheduled task, trust the
                  panel's certificate, link it
       remove     unlink and delete the GPO
@@ -32,6 +34,10 @@ param(
     # The panel's DNS name and address (preflight, dns).
     [string]$DnsName = '',
     [string]$DnsIp = '',
+    # 'allow' lets the dns action create a new zone named $DnsName when no existing
+    # zone holds it. The exe passes it only after the admin confirmed that zone by
+    # typing its name; a zone the plan did not announce is never created.
+    [ValidateSet('allow', 'deny')][string]$NewZone = 'deny',
     # DER file of the panel certificate to trust, and its SHA-1 thumbprint (apply).
     # The exe has already checked it is a self-signed, non-CA server certificate.
     [string]$TrustCert = '',
@@ -198,6 +204,7 @@ try {
         $result.dns_existing = @($t.a)
         if ($state -eq 'conflict') { throw 'dns_conflict' }
         if ($state -eq 'new_zone') {
+            if ($NewZone -ne 'allow') { throw 'dns_new_zone_not_confirmed' }
             Add-DnsServerPrimaryZone -ComputerName $server -Name $DnsName -ReplicationScope Domain | Out-Null
             Add-DnsServerResourceRecordA -ComputerName $server -ZoneName $DnsName -Name '@' -IPv4Address $DnsIp | Out-Null
             $result.dns_zone = $DnsName

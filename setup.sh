@@ -5,7 +5,10 @@
 #
 #   sudo ./setup.sh             first run: asks the questions below, then builds and starts
 #   sudo ./setup.sh             later runs (deploy/.env exists): rebuild + restart, no questions
-#   sudo ./setup.sh --lang en   English output (default: Turkish)
+#   sudo ./setup.sh --lang en   skip the language question (tr | en)
+#
+# On a terminal it first asks for the language (Turkish / English); without a
+# terminal it uses TOLIKOPA_LANG or --lang, else Turkish.
 #
 # First run asks for:
 #   - the panel's DNS name (e.g. tolikopa.corp.local) and this server's IP address;
@@ -16,7 +19,11 @@
 # if something is missing, stops and prints the commands that install it.
 #
 # For unattended runs the answers can come from the environment instead:
-#   TOLIKOPA_HOST, TOLIKOPA_IP, TOLIKOPA_ADMIN_USER, TOLIKOPA_ADMIN_PASSWORD
+#   TOLIKOPA_HOST, TOLIKOPA_IP, TOLIKOPA_ADMIN_USER, TOLIKOPA_LANG and the password as
+#   TOLIKOPA_ADMIN_PASSWORD_FILE=/root/tolikopa-admin.pw   (preferred: a file owned by
+#     root with mode 600 or 400; its first line is the password)
+#   TOLIKOPA_ADMIN_PASSWORD=...   (works, but `sudo VAR=... ./setup.sh` shows it in ps
+#     and in the shell history)
 
 set -Eeuo pipefail
 
@@ -33,16 +40,30 @@ MIN_BUILDX=0.17.0
 MIN_ENGINE=24.0.0
 MIN_FREE_GB=10
 
-UI_LANG="tr"
+UI_LANG="${TOLIKOPA_LANG:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --lang) UI_LANG="${2:-tr}"; shift 2 ;;
+    --lang) UI_LANG="${2:-}"; shift 2 ;;
     --lang=*) UI_LANG="${1#--lang=}"; shift ;;
-    -h|--help) sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '4,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
-[ "$UI_LANG" = en ] || UI_LANG="tr"
+# No --lang / TOLIKOPA_LANG: ask on a terminal, the system locale suggests the default.
+if [ -z "$UI_LANG" ] && [ -t 0 ] && [ -t 1 ]; then
+  lang_def=en
+  case "${LC_ALL:-${LANG:-}}" in tr*) lang_def="tr" ;; esac
+  echo
+  echo "  1) Türkçe"
+  echo "  2) English"
+  read -r -p "  Dil / Language [$([ "$lang_def" = tr ] && echo 1 || echo 2)]: " lang_ans || true
+  case "${lang_ans:-}" in
+    1|[tT]*) UI_LANG="tr" ;;
+    2|[eE]*) UI_LANG=en ;;
+    *) UI_LANG="$lang_def" ;;
+  esac
+fi
+case "$UI_LANG" in en|EN|En) UI_LANG=en ;; *) UI_LANG="tr" ;; esac
 
 # L "Türkçe" "English" — prints the text in the chosen language.
 L() { if [ "$UI_LANG" = en ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
@@ -65,7 +86,7 @@ ver_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
 
 # ── 0) Where and who ─────────────────────────────────────────────────────────
 [ "$(id -u)" -eq 0 ] || die "$(L "Root olarak çalıştırın:  sudo ./setup.sh" "Run as root:  sudo ./setup.sh")"
-[ -f "$DEPLOY_DIR/docker-compose.yml" ] && [ -f "$REPO_ROOT/server/Dockerfile" ] \
+{ [ -f "$DEPLOY_DIR/docker-compose.yml" ] && [ -f "$REPO_ROOT/server/Dockerfile" ]; } \
   || die "$(L "setup.sh deponun kök klasöründe olmalı (deploy/ ve server/ ile birlikte)." "setup.sh must sit in the repository root (next to deploy/ and server/).")"
 
 echo
@@ -233,12 +254,36 @@ ask() { # ask VAR "question" default
   printf -v "$__v" '%s' "${ans:-$def}"
 }
 
+# read_password_file PATH — the first line of a regular file that only root can
+# read. Sets ADMIN_PASS.
+read_password_file() {
+  local f="$1" st mode
+  local what="TOLIKOPA_ADMIN_PASSWORD_FILE ($f)"
+  { [ -f "$f" ] && [ ! -L "$f" ]; } || die "$what: $(L "normal bir dosya bulunamadı" "not found or not a regular file")"
+  st="$(stat -c '%u %a' -- "$f")"
+  [ "${st%% *}" = 0 ] || die "$what: $(L "dosyanın sahibi root olmalı:  sudo chown root:root $f" "the file must be owned by root:  sudo chown root:root $f")"
+  mode="${st#* }"
+  [ $(( 8#$mode & 8#077 )) -eq 0 ] \
+    || die "$what: $(L "dosyayı yalnızca root okuyabilmeli (izin $mode):  sudo chmod 600 $f" "only root may be able to read the file (mode $mode):  sudo chmod 600 $f")"
+  ADMIN_PASS=
+  IFS= read -r ADMIN_PASS < "$f" || true
+  ADMIN_PASS="${ADMIN_PASS%$'\r'}"
+}
+
 ask_admin() {
+  local pass_src=TOLIKOPA_ADMIN_PASSWORD
   ADMIN_USER="${TOLIKOPA_ADMIN_USER:-}"
   ADMIN_PASS="${TOLIKOPA_ADMIN_PASSWORD:-}"
+  if [ -n "${TOLIKOPA_ADMIN_PASSWORD_FILE:-}" ]; then
+    read_password_file "$TOLIKOPA_ADMIN_PASSWORD_FILE"
+    pass_src=TOLIKOPA_ADMIN_PASSWORD_FILE
+    check_password "$ADMIN_PASS" || die "$pass_src: $PASS_ERR"
+  fi
+  # Not inherited by anything this script starts (docker compose, curl, ...).
+  unset TOLIKOPA_ADMIN_PASSWORD
   if [ -n "$ADMIN_USER" ] && [ -n "$ADMIN_PASS" ]; then
     valid_user "$ADMIN_USER" || die "TOLIKOPA_ADMIN_USER: $(L "geçersiz kullanıcı adı" "invalid username")"
-    check_password "$ADMIN_PASS" || die "TOLIKOPA_ADMIN_PASSWORD: $PASS_ERR"
+    check_password "$ADMIN_PASS" || die "$pass_src: $PASS_ERR"
     return
   fi
   [ -t 0 ] || die "$(L "Soruları sormak için bir terminal gerekli (veya TOLIKOPA_* ortam değişkenlerini verin)." "A terminal is needed to ask the questions (or set the TOLIKOPA_* environment variables).")"
@@ -249,6 +294,8 @@ ask_admin() {
     valid_user "$ADMIN_USER" && break
     echo "    $(L "Harf, rakam ve . _ - @ kullanılabilir (en çok 64)." "Letters, digits and . _ - @ (at most 64).")"
   done
+  # A password that came from TOLIKOPA_ADMIN_PASSWORD_FILE is already checked.
+  [ "$pass_src" = TOLIKOPA_ADMIN_PASSWORD_FILE ] && return
   while :; do
     IFS= read -r -s -p "  $(L "Parola (en az 10 karakter)" "Password (at least 10 characters)"): " ADMIN_PASS || true; echo
     if ! check_password "$ADMIN_PASS"; then echo "    $PASS_ERR"; continue; fi
@@ -275,8 +322,10 @@ if [ -f "$ENV_FILE" ]; then
   say "$(L "Mevcut kurulum bulundu (deploy/.env) — güncelleniyor, soru sorulmayacak." "Existing installation found (deploy/.env) — updating, no questions.")"
   read -r PANEL_HOST SERVER_IP < <(sed -n 's/^SERVER_HOST="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$ENV_FILE" | head -n1) || true
   [ -n "${PANEL_HOST:-}" ] || die "$(L "deploy/.env içinde SERVER_HOST yok." "SERVER_HOST is missing from deploy/.env.")"
+  # The certificate is created before .env is written, so an .env without it was
+  # not left behind by this script: the certificate was lost or not restored.
   if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
-    die "$(L "deploy/tls içinde sertifika yok. Yedekten geri koyun; yeni sertifika üretmek, bilgisayarlara dağıtılmış güveni ve ajanların sabitlediği sertifikayı geçersiz kılar." "No certificate in deploy/tls. Restore it from a backup: a new certificate invalidates the trust distributed to the PCs and the one the agents pin.")"
+    die "$(L "deploy/tls içinde sertifika yok. Yedekten geri koyun; yeni sertifika üretmek, bilgisayarlara dağıtılmış güveni ve ajanların sabitlediği sertifikayı geçersiz kılar. (setup.sh'nin eski bir sürümünün yarıda kalmış ilk kurulumuysa ve hiç ajan dağıtılmadıysa: deploy/.env dosyasını silip yeniden çalıştırın.)" "No certificate in deploy/tls. Restore it from a backup: a new certificate invalidates the trust distributed to the PCs and the one the agents pin. (If this is an interrupted first run of an older setup.sh and no agent was ever deployed: delete deploy/.env and run again.)")"
   fi
 else
   FIRST_RUN=1
@@ -319,36 +368,22 @@ else
   fi
 fi
 
-# ── 3) Secrets and certificate (first run only) ──────────────────────────────
+# ── 3) Certificate, then secrets (first run only) ────────────────────────────
+# Order matters: .env is the marker of an existing installation, and an existing
+# installation without a certificate is treated as "restore it from a backup".
+# Writing .env last means a run that dies half-way is simply a first run again.
 if [ "$FIRST_RUN" -eq 1 ]; then
-  say "$(L "Gizli anahtarlar üretiliyor (deploy/.env)..." "Generating secrets (deploy/.env)...")"
   umask 077
-  cat > "$ENV_FILE.tmp" <<EOF
-# Tolikopa — created by setup.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ). Keep secret; never commit.
-POSTGRES_USER=tolikopa
-POSTGRES_DB=tolikopa
-POSTGRES_PASSWORD=$(openssl rand -hex 24)
-INGEST_TOKEN=$(openssl rand -hex 32)
-JWT_SECRET=$(openssl rand -hex 32)
-SETUP_CODE=
-SERVER_HOST="$PANEL_HOST $SERVER_IP"
-DEFAULT_SNI=$PANEL_HOST
-OFFLINE_WARN_SEC=300
-OFFLINE_CRIT_SEC=1800
-TZ=Europe/Istanbul
-SMTP_ENABLED=false
-SMTP_HOST=
-SMTP_PORT=587
-SMTP_USER=
-SMTP_PASS=
-SMTP_FROM=
-ALERT_EMAIL_TO=
-EOF
-  chmod 600 "$ENV_FILE.tmp"
-  mv "$ENV_FILE.tmp" "$ENV_FILE"
-  ok "$(L ".env oluşturuldu (izin 600)." ".env created (mode 600).")"
-
-  if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
+  if [ -f "$CERT" ] && [ -f "$KEY" ]; then
+    # Left by an interrupted first run, or restored from a backup before .env was:
+    # reuse it (never replace a certificate that may already be distributed), but
+    # only if it is for the names given now.
+    if ! openssl x509 -in "$CERT" -noout -checkhost "$PANEL_HOST" 2>/dev/null | grep -q 'does match' \
+       || ! openssl x509 -in "$CERT" -noout -checkip "$SERVER_IP" 2>/dev/null | grep -q 'does match'; then
+      die "$(L "deploy/tls içinde $PANEL_HOST / $SERVER_IP için olmayan bir sertifika var. Yedekten geri konduysa aynı adları girin; yarıda kalmış bir kurulumdan kaldıysa ve hiç dağıtılmadıysa deploy/tls klasörünü silip yeniden çalıştırın." "deploy/tls holds a certificate that is not for $PANEL_HOST / $SERVER_IP. If it was restored from a backup, enter the same names; if it is left over from an interrupted install and was never distributed, delete deploy/tls and run again.")"
+    fi
+    ok "$(L "Mevcut sertifika kullanılıyor" "Using the existing certificate"): $CERT"
+  else
     say "$(L "Kendinden imzalı sertifika oluşturuluyor: $PANEL_HOST, $SERVER_IP ($CERT_DAYS gün)..." "Creating a self-signed certificate: $PANEL_HOST, $SERVER_IP ($CERT_DAYS days)...")"
     install -d -m 0700 "$TLS_DIR"
     cnf="$(mktemp)"
@@ -376,12 +411,54 @@ EOF
     mv "$KEY.tmp" "$KEY"; mv "$CERT.tmp" "$CERT"
     ok "$(L "Sertifika hazır" "Certificate ready"): $CERT"
   fi
+
+  say "$(L "Gizli anahtarlar üretiliyor (deploy/.env)..." "Generating secrets (deploy/.env)...")"
+  # Plain assignments, not $(...) inside the here-document: there a failing
+  # openssl would not stop the script and .env would get empty secrets.
+  pg_pass="$(openssl rand -hex 24)"
+  ingest_token="$(openssl rand -hex 32)"
+  jwt_secret="$(openssl rand -hex 32)"
+  { [ ${#pg_pass} -eq 48 ] && [ ${#ingest_token} -eq 64 ] && [ ${#jwt_secret} -eq 64 ]; } \
+    || die "$(L "openssl rand beklenen çıktıyı vermedi." "openssl rand did not produce the expected output.")"
+  cat > "$ENV_FILE.tmp" <<EOF
+# Tolikopa — created by setup.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ). Keep secret; never commit.
+POSTGRES_USER=tolikopa
+POSTGRES_DB=tolikopa
+POSTGRES_PASSWORD=$pg_pass
+INGEST_TOKEN=$ingest_token
+JWT_SECRET=$jwt_secret
+SETUP_CODE=
+SERVER_HOST="$PANEL_HOST $SERVER_IP"
+DEFAULT_SNI=$PANEL_HOST
+OFFLINE_WARN_SEC=300
+OFFLINE_CRIT_SEC=1800
+TZ=Europe/Istanbul
+SMTP_ENABLED=false
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=
+ALERT_EMAIL_TO=
+EOF
+  chmod 600 "$ENV_FILE.tmp"
+  mv "$ENV_FILE.tmp" "$ENV_FILE"
+  unset pg_pass ingest_token jwt_secret
+  ok "$(L ".env oluşturuldu (izin 600)." ".env created (mode 600).")"
 fi
+
+# Caddy runs with every capability dropped except NET_BIND_SERVICE, so it reads
+# the key as its owner: root, mode 600 (also repairs a backup restored by another
+# user). The certificate is public (agents and the api container read it).
+chown 0:0 "$KEY" "$CERT"
+chmod 600 "$KEY"; chmod 644 "$CERT"
 
 # ── 4) Firewall ──────────────────────────────────────────────────────────────
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
   ufw allow 80/tcp >/dev/null && ufw allow 443/tcp >/dev/null
   ok "$(L "ufw: 80 ve 443 açık." "ufw: 80 and 443 allowed.")"
+  # Docker's own iptables rules for published ports come before ufw's.
+  echo "  ${c_d}$(L "Not: Docker'ın yayımladığı portlar ufw kurallarını atlar; ufw ile kısıtlanamaz. Tek bir arayüzü dinlemek için deploy/.env içinde BIND_ADDR=<IP> verin." "Note: ports published by Docker bypass ufw rules; ufw cannot restrict them. To listen on one interface only, set BIND_ADDR=<IP> in deploy/.env.")${c_0}"
 fi
 
 # ── 5) Build and start ───────────────────────────────────────────────────────
@@ -390,11 +467,14 @@ dc up -d --build --remove-orphans
 ok "$(L "Container'lar çalışıyor." "Containers are running.")"
 
 say "$(L "Panelin yanıt vermesi bekleniyor..." "Waiting for the panel to answer...")"
+# With BIND_ADDR set in .env, 443 is published on that address only, not loopback.
+probe_ip="$(sed -n 's/^BIND_ADDR=["'\'']\{0,1\}\([^"'\'']*\)["'\'']\{0,1\}$/\1/p' "$ENV_FILE" | tail -n1)"
+case "$probe_ip" in ""|0.0.0.0) probe_ip=127.0.0.1 ;; esac
 healthy=0
 for _ in $(seq 1 100); do
   # Through Caddy, by name, verified against our own certificate: proves DNS-free
   # TLS, the proxy and the API in one request.
-  if curl -fsS --max-time 5 --resolve "$PANEL_HOST:443:127.0.0.1" --cacert "$CERT" \
+  if curl -fsS --max-time 5 --resolve "$PANEL_HOST:443:$probe_ip" --cacert "$CERT" \
        "https://$PANEL_HOST/api/healthz" >/dev/null 2>&1; then
     healthy=1; break
   fi
@@ -406,7 +486,7 @@ fi
 ok "$(L "Panel yanıt veriyor (TLS doğrulandı)." "The panel answers (TLS verified).")"
 
 # ── 6) First administrator ───────────────────────────────────────────────────
-needs_admin="$(curl -fsS --max-time 5 --resolve "$PANEL_HOST:443:127.0.0.1" --cacert "$CERT" \
+needs_admin="$(curl -fsS --max-time 5 --resolve "$PANEL_HOST:443:$probe_ip" --cacert "$CERT" \
   "https://$PANEL_HOST/api/setup/status" | grep -o '"needs_admin":[a-z]*' | cut -d: -f2 || true)"
 if [ "$needs_admin" = true ]; then
   [ -n "${ADMIN_USER:-}" ] || ask_admin
@@ -432,6 +512,10 @@ if dc cp api:/opt/tolikopa/artifacts/tolikopa-agent "$agent_tmp" >/dev/null 2>&1
   systemctl stop tolikopa-agent >/dev/null 2>&1 || true
   install -D -m 0755 "$agent_tmp" /opt/tolikopa/tolikopa-agent
   install -d -m 0700 /etc/tolikopa
+  # The agent's only writable place under the unit's ProtectSystem=strict (state,
+  # spool, logs). It must exist before the unit starts: ReadWritePaths= fails on a
+  # missing path.
+  install -d -m 0755 /var/lib/tolikopa
   token="$(sed -n 's/^INGEST_TOKEN=//p' "$ENV_FILE" | head -n1)"
   # PEM is base64 + header lines: escaping the line breaks is all JSON needs.
   pem_json="$(awk '{printf "%s\\n", $0}' "$CERT")"
@@ -455,7 +539,15 @@ Wants=network-online.target
 ExecStart=/opt/tolikopa/tolikopa-agent run
 Restart=always
 RestartSec=10
-NoNewPrivileges=true
+# Runs as root (it reads every process's /proc entry and statfs()s every mount),
+# but sees the file system read-only except its own /var/lib/tolikopa (state,
+# spool, logs). ProtectHome=read-only, not yes: disk usage of a /home mount still
+# needs the mount point visible. /proc, /sys and /run/systemd/sessions stay readable.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/var/lib/tolikopa
+NoNewPrivileges=yes
 
 [Install]
 WantedBy=multi-user.target

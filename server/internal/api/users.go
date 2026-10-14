@@ -34,6 +34,9 @@ func (a *API) Users(c echo.Context) error {
 		JOIN machine m ON m.machine_id = ml.machine_id
 		LEFT JOIN user_profile up ON up.logon_user = ml.logon_user
 		WHERE ml.logon_user IS NOT NULL AND ml.logon_user <> '' AND m.archived_at IS NULL
+		  -- The Users directory lists people at domain PCs; a Linux server's local
+		  -- SSH account is not one of them.
+		  AND m.kind <> 'linux'
 		  AND ($1 = '' OR $1 = ANY(up.tags))
 		ORDER BY ml.logon_user, ml.ts DESC`, tag)
 	if err != nil {

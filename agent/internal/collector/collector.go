@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
@@ -375,4 +377,34 @@ func normalizeProcName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = strings.TrimSuffix(name, ".exe")
 	return name
+}
+
+// MaxAppNameLen mirrors the server's app_focus name cap (bytes, after
+// normalisation). A longer name would be silently dropped server-side.
+const MaxAppNameLen = 128
+
+// ValidAppName normalises an application base name exactly like process names
+// (lowercase, no ".exe") and reports whether the result is acceptable as an
+// app_focus key. It rejects: empty names, names over MaxAppNameLen bytes,
+// invalid UTF-8, anything containing a path separator (a path is never an app
+// name, and a path is forbidden data), control and format characters (bidi
+// overrides would spoof the panel), and the "__" prefix reserved for helper
+// control fields. The in-session helper runs as the (untrusted) user, so every
+// name it relays passes through here before it reaches the sender.
+func ValidAppName(name string) (string, bool) {
+	// Check UTF-8 on the raw input: strings.ToLower would silently turn invalid
+	// bytes into U+FFFD.
+	if !utf8.ValidString(name) {
+		return "", false
+	}
+	n := normalizeProcName(name)
+	if n == "" || len(n) > MaxAppNameLen || strings.HasPrefix(n, "__") {
+		return "", false
+	}
+	for _, r := range n {
+		if r == '/' || r == '\\' || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return "", false
+		}
+	}
+	return n, true
 }

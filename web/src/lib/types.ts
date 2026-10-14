@@ -181,8 +181,13 @@ export interface FleetSummary {
   online: number
   offline: number
   active: number
+  /** Online, logged on + unlocked, no input for >= 5 min. Never counted as active. */
+  idle: number
+  /** Keyed by the server's severity values: `warning` | `critical`. */
   alerts_by_severity: Record<string, number>
+  /** 0..100 */
   avg_cpu: number
+  /** PERCENT 0..100 here — unlike FleetOverview.avg_mem, which is a 0..1 ratio. */
   avg_mem: number
 }
 
@@ -711,6 +716,8 @@ export interface RemediationAttemptDTO {
   hostname?: string
   kind: RemediationKind
   item_id: string
+  /** Catalog label (Turkish); absent when the id has left the catalog. */
+  display_name?: string
   action: RemediationAction | string
   outcome: RemediationOutcome | string
   error_code?: string

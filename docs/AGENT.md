@@ -14,7 +14,11 @@ foreground application's **base name + duration** (never the window title/docume
 SMART health · application crash event (the crashing application's **base name** + exception code
 + time) · presence information for hygiene items **in the compiled catalog only** (see below) ·
 the machine's **own local IPv4 addresses** (identity information like the hostname; read from the
-interface configuration — never sockets, peers, or traffic).
+interface configuration — never sockets, peers, or traffic) · hardware/OS identity (OS name and
+build, CPU model and core count, total RAM) · **battery state** (present, charge %, on AC,
+charging, design/full-charge capacity, cycle count) · **Windows Update posture as counts and
+times only** (number of pending updates, reboot pending, last scan/install time — never update
+titles, KB numbers or install history).
 
 **Forbidden (never):** screen contents/screenshots · keystrokes · mouse coordinates · window
 titles · foreground-window text · visited URLs · browser history · DNS/packet contents · file

@@ -36,6 +36,7 @@ export function deriveSlowMachines(fleet: FleetMachine[], limit = 20): SlowMachi
 
   for (const m of fleet) {
     if (!m.online) continue // an offline machine's last snapshot says nothing about speed
+    if (m.kind === 'linux') continue // the report ranks user PCs; the server API excludes Linux too
 
     const reasons: SlowReason[] = []
     let total = 0

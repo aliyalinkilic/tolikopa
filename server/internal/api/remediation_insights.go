@@ -76,11 +76,13 @@ func (a *API) GetRemediationFailures(c echo.Context) error {
 
 	// The fleet's highest reported agent version. Compared as an int array so
 	// 1.10.0 sorts above 1.9.0; anything that is not a plain dotted version (a dev
-	// build tag) is ignored rather than cast.
+	// build tag) is ignored rather than cast. Linux hosts are left out: they run
+	// no hygiene and their agent is built and shipped separately, so a newer Linux
+	// build must not mark every Windows PC as "behind".
 	if err := a.pool.QueryRow(ctx, `
 		SELECT COALESCE((
 			SELECT agent_version FROM machine
-			WHERE archived_at IS NULL AND agent_version ~ '^\d{1,6}(\.\d{1,6}){0,3}$'
+			WHERE archived_at IS NULL AND kind <> 'linux' AND agent_version ~ '^\d{1,6}(\.\d{1,6}){0,3}$'
 			ORDER BY string_to_array(agent_version, '.')::int[] DESC
 			LIMIT 1), '')`).Scan(&out.LatestAgentVersion); err != nil {
 		return serverError(err)

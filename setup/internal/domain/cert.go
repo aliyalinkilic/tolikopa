@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -26,6 +27,13 @@ import (
 // non-CA server certificate is ever accepted for this — it vouches for nothing
 // but itself, so the worst a stolen server key allows is impersonating the
 // panel's own names.
+//
+// Which names those are is checked too: a self-signed leaf for
+// login.microsoftonline.com or *.corp.example.com is just as dangerous as a CA
+// once every PC trusts it. A trustable certificate names exactly one DNS host
+// and at most one IP address (what setup.sh generates), carries no wildcard,
+// and is bound to the server the bundle points at: its DNS name is the host of
+// server_url, or — when server_url is an address — its IP is that address.
 type PanelCert struct {
 	DER        []byte
 	Thumbprint string // SHA-1, upper-case hex: the key Windows stores it under
@@ -64,11 +72,12 @@ func LoadPanelCert(b *payload.Bundle) (*PanelCert, error) {
 	if strings.TrimSpace(cfg.TLSCAPem) == "" {
 		return nil, nil
 	}
-	return ParsePanelCert([]byte(cfg.TLSCAPem))
+	return ParsePanelCert([]byte(cfg.TLSCAPem), b.Manifest.ServerURL)
 }
 
 // ParsePanelCert parses PEM text and decides whether it may be distributed.
-func ParsePanelCert(pemText []byte) (*PanelCert, error) {
+// serverURL is the manifest's server_url: the certificate must belong to it.
+func ParsePanelCert(pemText []byte, serverURL string) (*PanelCert, error) {
 	var certs []*x509.Certificate
 	rest := pemText
 	for {
@@ -111,14 +120,59 @@ func ParsePanelCert(pemText []byte) (*PanelCert, error) {
 		pc.Reason = "it is not self-signed"
 	case !hasServerAuth(c):
 		pc.Reason = "it is not a TLS server certificate"
+	case hasWildcard(c.DNSNames):
+		pc.Reason = "it carries a wildcard name"
 	case len(c.DNSNames) == 0:
 		pc.Reason = "it names no DNS host"
-	case time.Now().After(c.NotAfter):
-		pc.Reason = "it has expired"
+	case len(c.DNSNames) != 1:
+		pc.Reason = "it names more than one DNS host"
+	case !payload.ValidHostName(strings.ToLower(c.DNSNames[0])):
+		pc.Reason = "its DNS name is not a valid host name"
+	case len(c.IPAddresses) > 1:
+		pc.Reason = "it names more than one IP address"
+	case len(c.URIs) > 0 || len(c.EmailAddresses) > 0:
+		pc.Reason = "it carries names other than a DNS host and an IP address"
 	default:
-		pc.Trustable = true
+		if r := serverMismatch(c, serverURL); r != "" {
+			pc.Reason = r
+		} else if time.Now().After(c.NotAfter) {
+			pc.Reason = "it has expired"
+		} else {
+			pc.Trustable = true
+		}
 	}
 	return pc, nil
+}
+
+func hasWildcard(names []string) bool {
+	for _, n := range names {
+		if strings.Contains(n, "*") {
+			return true
+		}
+	}
+	return false
+}
+
+// serverMismatch ties the certificate to the server the bundle names. The DNS
+// name may be any name the admin chose for the panel (inside the AD domain or
+// not), but it must be the one the agents and browsers are sent to. It returns
+// "" when the certificate matches.
+func serverMismatch(c *x509.Certificate, serverURL string) string {
+	u, err := url.Parse(serverURL)
+	if serverURL == "" || err != nil || u.Hostname() == "" {
+		return "the bundle names no server to match it against"
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		if len(c.IPAddresses) != 1 || !c.IPAddresses[0].Equal(ip) {
+			return "its IP address is not the server's address " + host
+		}
+		return ""
+	}
+	if !strings.EqualFold(c.DNSNames[0], host) {
+		return "its DNS name is not the server's name " + strings.ToLower(host)
+	}
+	return ""
 }
 
 func hasServerAuth(c *x509.Certificate) bool {

@@ -3,7 +3,7 @@ import type { FormEvent, ReactNode } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { Activity, ArrowLeft, KeyRound, Lock, ShieldCheck, User } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { LogoMark, useBrandSubtitle } from '@/components/Logo'
+import { LogoMark, Wordmark, useBrandSubtitle } from '@/components/Logo'
 import { LanguagePicker, ThemePicker } from '@/components/PrefControls'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
@@ -105,7 +105,7 @@ export function Login() {
           <motion.div variants={fadeUp} className="flex items-center gap-3">
             <LogoMark size={40} animated />
             <div className="min-w-0">
-              <div className="text-[22px] font-bold tracking-[-0.02em] text-text">{t('common.appName')}</div>
+              <Wordmark className="block text-[22px]" />
               <div className="truncate text-[11px] font-medium uppercase tracking-[0.22em] text-text-dim">{brand}</div>
             </div>
           </motion.div>
@@ -151,7 +151,7 @@ export function Login() {
             <div className="mb-8 flex items-center gap-3 lg:hidden">
               <LogoMark size={36} />
               <div className="min-w-0">
-                <div className="text-[20px] font-bold tracking-[-0.02em] text-text">{t('common.appName')}</div>
+                <Wordmark className="block text-[20px]" />
                 <div className="truncate text-[10px] font-medium uppercase tracking-[0.22em] text-text-dim">{brand}</div>
               </div>
             </div>

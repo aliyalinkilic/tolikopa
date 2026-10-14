@@ -147,14 +147,21 @@ func Preflight(m *payload.Manifest, dns *DNSTarget) (*Result, error) {
 }
 
 // ApplyDNS makes dns.Name resolve to dns.IP on the domain's DNS servers: an A
-// record in the zone that contains the name, or — when no zone does — a new
-// AD-integrated zone of that exact name. An existing record pointing elsewhere is
-// never overwritten.
-func ApplyDNS(m *payload.Manifest, dns DNSTarget) (*Result, error) {
+// record in the zone that contains the name, or — when no zone does and
+// allowNewZone is set — a new AD-integrated zone of that exact name. A new zone
+// answers for a whole name space on every domain PC, so it is created only after
+// the admin confirmed it interactively; without that the script refuses
+// (dns_new_zone_not_confirmed), even if a zone vanished since the preflight. An
+// existing record pointing elsewhere is never overwritten.
+func ApplyDNS(m *payload.Manifest, dns DNSTarget, allowNewZone bool) (*Result, error) {
 	if !payload.ValidHostName(dns.Name) || !payload.ValidIPv4(dns.IP) {
 		return nil, errors.New("invalid DNS name or address")
 	}
-	return run(m, "dns", "-DnsName", dns.Name, "-DnsIp", dns.IP)
+	newZone := "deny"
+	if allowNewZone {
+		newZone = "allow"
+	}
+	return run(m, "dns", "-DnsName", dns.Name, "-DnsIp", dns.IP, "-NewZone", newZone)
 }
 
 // TaskXML renders the Group Policy Preferences scheduled-task definition.

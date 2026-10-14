@@ -140,8 +140,9 @@ func ValidIPv4(s string) bool {
 	return !ip.IsUnspecified() && !ip.IsLoopback() && !ip.IsMulticast() && !ip.Equal(net.IPv4bcast)
 }
 
-// validServerURL accepts a plain http(s)://host[:port][/path] of printable ASCII,
-// without credentials, query or fragment.
+// validServerURL accepts a plain https://host[:port][/path] of printable ASCII,
+// without credentials, query or fragment. Plain http is refused: the server only
+// serves https, and the agents must never send their token in the clear.
 func validServerURL(s string) bool {
 	if len(s) > 256 {
 		return false
@@ -152,7 +153,7 @@ func validServerURL(s string) bool {
 		}
 	}
 	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return false
 	}
 	return u.User == nil && u.RawQuery == "" && u.Fragment == "" && !u.ForceQuery

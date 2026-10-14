@@ -2,8 +2,10 @@ module github.com/aliyalinkilic/tolikopa/server
 
 go 1.26
 
-// Direct dependencies are populated/pinned by `go mod tidy` at build time
-// (the Dockerfile runs it). Primary deps:
+// The require blocks and go.sum are committed and complete: the image build runs
+// `go mod download` + `go build -mod=readonly`, never `go mod tidy`. After adding
+// or removing an import, run `go mod tidy` locally and commit both files.
+// Primary deps:
 //   github.com/labstack/echo/v4     — HTTP framework
 //   github.com/jackc/pgx/v5         — PostgreSQL driver + pgxpool
 //   github.com/golang-jwt/jwt/v5    — admin session tokens

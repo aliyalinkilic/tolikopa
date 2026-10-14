@@ -36,6 +36,9 @@ const (
 	maxDisksPerSample = 20
 	maxProcessRows    = 5000
 	maxAppFocusRows   = 200
+	maxEvents         = 512
+	maxDiskHealthRows = 64
+	maxTextLen        = 255 // hostnames, user names, mounts, OS strings …
 	maxAppNameLen     = 128
 	acquireTimeout    = 2 * time.Second
 
@@ -99,6 +102,55 @@ func (ig *Ingester) RequireIngest(next echo.HandlerFunc) echo.HandlerFunc {
 }
 
 // tooLarge is a 413 payload_too_large.
+// clip cuts s to at most maxTextLen runes. Agents never send longer values; a
+// longer one is either a bug or someone filling the tables, and neither should
+// reach the database at full length.
+func clip(s string) string {
+	if len(s) <= maxTextLen {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= maxTextLen {
+		return s
+	}
+	return string(r[:maxTextLen])
+}
+
+// clipStrings bounds every free-text field of a batch.
+func clipStrings(env *model.Envelope) {
+	m := &env.Machine
+	for _, p := range []*string{&m.Hostname, &m.OS, &m.OSBuild, &m.Domain, &m.Kind, &m.CPUModel} {
+		*p = clip(*p)
+	}
+	for i := range env.Samples {
+		s := &env.Samples[i]
+		s.LogonUser, s.SessionState = clip(s.LogonUser), clip(s.SessionState)
+		for j := range s.Disks {
+			s.Disks[j].Mount = clip(s.Disks[j].Mount)
+		}
+		for j := range s.Processes {
+			s.Processes[j].Name = clip(s.Processes[j].Name)
+		}
+	}
+	for i := range env.Events {
+		e := &env.Events[i]
+		e.Kind, e.ProcessName, e.Severity = clip(e.Kind), clip(e.ProcessName), clip(e.Severity)
+		for k, v := range e.Detail {
+			if len(k) > 64 {
+				delete(e.Detail, k)
+				continue
+			}
+			e.Detail[k] = clip(v)
+		}
+	}
+	for i := range env.DiskHealth {
+		env.DiskHealth[i].Disk = clip(env.DiskHealth[i].Disk)
+	}
+	for i := range env.AppFocus {
+		env.AppFocus[i].Name = clip(env.AppFocus[i].Name)
+	}
+}
+
 func tooLarge(message string) error {
 	return apierr.New(http.StatusRequestEntityTooLarge, apierr.PayloadTooLarge, message)
 }
@@ -148,9 +200,20 @@ func (ig *Ingester) Handle(c echo.Context) error {
 	if totalProc > maxProcessRows {
 		return tooLarge("too many process rows")
 	}
-	if len(env.AppFocus) > maxAppFocusRows {
-		return tooLarge("too many app_focus rows")
+	if len(env.Events) > maxEvents {
+		return tooLarge("too many events")
 	}
+	if len(env.DiskHealth) > maxDiskHealthRows {
+		return tooLarge("too many disk_health rows")
+	}
+	// app_focus is fed by a helper that runs in the signed-in user's session, so a
+	// user can inflate it. Failing the batch would let them blank their PC's
+	// telemetry; keeping the busiest rows only costs them their own noise.
+	if len(env.AppFocus) > maxAppFocusRows {
+		sort.Slice(env.AppFocus, func(i, j int) bool { return env.AppFocus[i].Seconds > env.AppFocus[j].Seconds })
+		env.AppFocus = env.AppFocus[:maxAppFocusRows]
+	}
+	clipStrings(&env)
 	if r := env.Remediation; r != nil {
 		if len(r.Present) > maxRemediationItems {
 			return tooLarge("too many remediation items")
@@ -169,11 +232,11 @@ func (ig *Ingester) Handle(c echo.Context) error {
 	accepted := make([]model.Sample, 0, len(env.Samples))
 	for _, s := range env.Samples {
 		if s.TS.After(maxFuture) {
-			result.Rejected = append(result.Rejected, model.RejectedSample{TS: s.TS, Reason: "ts gelecekte"})
+			result.Rejected = append(result.Rejected, model.RejectedSample{TS: s.TS, Reason: "ts_in_future"})
 			continue
 		}
 		if s.TS.Before(minPast) {
-			result.Rejected = append(result.Rejected, model.RejectedSample{TS: s.TS, Reason: "ts çok eski"})
+			result.Rejected = append(result.Rejected, model.RejectedSample{TS: s.TS, Reason: "ts_too_old"})
 			continue
 		}
 		if s.CPUPct < 0 {

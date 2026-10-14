@@ -638,8 +638,15 @@ type RemediationCatalogItem struct {
 	ProcessNames []string `json:"process_names,omitempty"`
 	Notes        string   `json:"notes,omitempty"`
 	Deprecated   bool     `json:"deprecated"`
-	Selected     bool     `json:"selected"`      // in the current policy
-	PresentCount int      `json:"present_count"` // machines where it is still present
+	Selected     bool     `json:"selected"` // in the current policy
+	// PresentCount: machines where it is still present. null while no machine
+	// has sent a hygiene report at all — "unknown", which the panel must not
+	// render as a confident 0.
+	PresentCount *int `json:"present_count"`
+	// ReportedCount: machines that have sent a hygiene report (the denominator).
+	// Agents scan their whole compiled catalog and report only what is present,
+	// so every reporting machine counts for every item.
+	ReportedCount int `json:"reported_count"`
 }
 
 // RemediationPolicyDTO is the stored fleet-wide policy. Enabled=false and
@@ -817,6 +824,15 @@ type MachineRemediationItem struct {
 type WSMessage struct {
 	Type    string `json:"type"` // fleet.update | machine.metric | alert.opened | alert.resolved
 	Payload any    `json:"payload"`
+}
+
+// MachineMetricPush is the machine.metric payload, sent on the "machine:<id>"
+// channel whenever that machine's machine_live row changed.
+type MachineMetricPush struct {
+	MachineID string    `json:"machine_id"`
+	T         time.Time `json:"t"`
+	CPUPct    float64   `json:"cpu_pct"`
+	MemRatio  float64   `json:"mem_ratio"` // 0..1
 }
 
 // MachineArchiveRequest — POST /api/admin/machines/archive and …/restore.

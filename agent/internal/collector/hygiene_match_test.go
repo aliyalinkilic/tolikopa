@@ -88,15 +88,15 @@ func TestMatchStartupItemDoesNotOverMatch(t *testing.T) {
 	catalog := appcatalog.Kind(appcatalog.KindStartup)
 
 	overMatches := []string{
-		"Skype for Business",           // vs family "Skype"
-		"SkypeForBusinessLync",         //
-		"OneDriveSetup",                // vs family "OneDrive"
-		"OneDrive Standalone Updater",  //
-		"ZoomOutlookPlugin",            // vs family "Zoom"
-		"ZoomVDIUniversalPlugin",       //
-		"SteamCloudBackupHelper",       // vs family "Steam"
-		"DiscordCanaryDevBuild",        // vs family "Discord"
-		"SpotifyWebHelperLegacy",       // vs family "Spotify"
+		"Skype for Business",          // vs family "Skype"
+		"SkypeForBusinessLync",        //
+		"OneDriveSetup",               // vs family "OneDrive"
+		"OneDrive Standalone Updater", //
+		"ZoomOutlookPlugin",           // vs family "Zoom"
+		"ZoomVDIUniversalPlugin",      //
+		"SteamCloudBackupHelper",      // vs family "Steam"
+		"DiscordCanaryDevBuild",       // vs family "Discord"
+		"SpotifyWebHelperLegacy",      // vs family "Spotify"
 	}
 	for _, name := range overMatches {
 		if it, ok := matchStartupItem(catalog, name); ok {
@@ -106,10 +106,10 @@ func TestMatchStartupItemDoesNotOverMatch(t *testing.T) {
 
 	// The genuinely exact names must still match.
 	exact := map[string]string{
-		"Skype":                   "startup.skype",
-		"OneDrive":                "startup.onedrive",
-		"Zoom":                    "startup.zoom",
-		"Steam":                   "startup.steam",
+		"Skype":                    "startup.skype",
+		"OneDrive":                 "startup.onedrive",
+		"Zoom":                     "startup.zoom",
+		"Steam":                    "startup.steam",
 		"com.squirrel.Teams.Teams": "startup.teams",
 	}
 	for name, want := range exact {

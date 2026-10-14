@@ -155,8 +155,19 @@ func (a *Auth) PutPrefs(c echo.Context) error {
 		return err
 	}
 	var body map[string]json.RawMessage
-	if err := c.Bind(&body); err != nil {
-		return apierr.BadRequest("invalid request body")
+	if err := apierr.Bind(c, &body); err != nil {
+		return err
+	}
+	// A map accepts any key, so unknown ones are checked here: a misspelt or
+	// wrapped key used to be dropped and the call answered 204 having saved nothing.
+	if len(body) == 0 {
+		return apierr.BadRequest("theme or lang is required")
+	}
+	for key := range body {
+		if key != "theme" && key != "lang" {
+			return apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
+				"unknown field in request body: "+key, map[string]any{"field": key})
+		}
 	}
 	set := map[string]string{}
 	del := []string{}

@@ -246,10 +246,12 @@ git. Create a **fine-grained** token that has access to this repository only, wi
 ## 5. Step 3: Run setup.sh
 
 ```bash
-cd ~/tolikopa && sudo ./setup.sh --lang en
+cd ~/tolikopa && sudo ./setup.sh
 ```
 
-Turkish is the default language. Without `--lang en` the script prints Turkish.
+The first question is the language (`1) Türkçe`, `2) English`; the default follows the server's
+locale). To skip it, pass `--lang en` or `--lang tr`. Without a terminal (unattended runs) the
+script uses `TOLIKOPA_LANG` or `--lang`, otherwise Turkish.
 
 ### 5.1 Prerequisite check
 
@@ -310,6 +312,10 @@ First administrator account (you sign in to the panel with it):
 - **Username:** letters, digits and `. _ - @`, at most 64 characters. Enter accepts `admin`.
 - **Password:** at least 10 characters and at most 72 bytes. It is not shown while you type. It
   is never written to `.env`, a command line or a log.
+- **Unattended:** the answers can come from `TOLIKOPA_HOST`, `TOLIKOPA_IP`,
+  `TOLIKOPA_ADMIN_USER` and, for the password, preferably `TOLIKOPA_ADMIN_PASSWORD_FILE` (a file
+  owned by root, mode 600 or 400, the password on its first line). See
+  [DEPLOYMENT.md → Unattended installation](DEPLOYMENT.md#unattended-installation).
 
 **4. Summary and confirmation.**
 
@@ -326,13 +332,13 @@ Press **Enter** (or `y`) to continue. `n` cancels, and nothing is changed.
 
 | Output | What happens |
 |--------|--------------|
-| `Generating secrets (deploy/.env)...` | Writes `deploy/.env` (mode 600) with a random database password, ingest token and session key, plus the panel name and IP |
-| `Creating a self-signed certificate: ...` | Creates `deploy/tls/tolikopa.crt` and `tolikopa.key`, valid for 3650 days, for exactly the panel name and the IP |
-| `ufw: 80 and 443 allowed.` | Only if `ufw` is already enabled. Otherwise the firewall is not changed |
+| `Creating a self-signed certificate: ...` | Creates `deploy/tls/tolikopa.crt` and `tolikopa.key`, valid for 3650 days, for exactly the panel name and the IP. A certificate left by an interrupted earlier run is reused instead (`Using the existing certificate`) |
+| `Generating secrets (deploy/.env)...` | Writes `deploy/.env` (mode 600) with a random database password, ingest token and session key, plus the panel name and IP. It comes after the certificate on purpose: if the script stops before this point, the next run is a first run again |
+| `ufw: 80 and 443 allowed.` | Only if `ufw` is already enabled. Otherwise the firewall is not changed. ufw does not filter ports that Docker publishes; see [DEPLOYMENT.md → Firewall](DEPLOYMENT.md#firewall-and-published-ports) |
 | `Building images and starting services (5–15 minutes the first time)...` | Builds and starts the database, the API and the web server (Caddy) with Docker Compose |
 | `Waiting for the panel to answer...` | Calls the panel over HTTPS on the server itself and checks the certificate. Waits at most 5 minutes |
 | `Creating the administrator account: admin` | Creates the account from 5.2 |
-| `Installing the Linux agent (the server monitors itself)...` | Installs `/opt/tolikopa/tolikopa-agent` as the systemd service `tolikopa-agent`. The server then appears in the panel too |
+| `Installing the Linux agent (the server monitors itself)...` | Installs `/opt/tolikopa/tolikopa-agent` as the systemd service `tolikopa-agent` (sandboxed: read-only file system except `/var/lib/tolikopa`). The server then appears in the panel too |
 
 **Why a self-signed certificate.** The certificate is **not a CA** (`CA:FALSE`). The setup tool
 later makes every domain PC trust it, so browsers open the panel without a warning. A CA in that
@@ -740,7 +746,7 @@ The archive contains secrets: store it securely. Restore notes are in
 | `cannot reach https://... (internet/proxy)` | No outbound internet, or a proxy | Allow outbound access. With a proxy, configure Docker too: https://docs.docker.com/engine/daemon/proxy/ |
 | `The panel did not answer within 5 minutes.` | A container failed to start | `sudo docker compose -f ~/tolikopa/deploy/docker-compose.yml logs api web` |
 | `No certificate in deploy/tls.` | `deploy/.env` exists but the certificate is gone | Restore `deploy/tls/` from a backup. See [DEPLOYMENT.md → Troubleshooting](DEPLOYMENT.md#troubleshooting) |
-| The panel does not open from PCs | Firewall | Allow TCP 443 (and 80) to the server in `ufw` and in any network firewall |
+| The panel does not open from PCs | Firewall, or `BIND_ADDR` | Allow TCP 443 (and 80) to the server in any network firewall (ufw does not affect Docker-published ports). If `BIND_ADDR` is set in `deploy/.env`, the panel answers only on that address |
 | The browser still warns about the certificate | The GPO has not applied, or the PC is outside the GPO target | On the PC: `gpupdate /force`, then restart the browser. Check that the PC is in the target OU. Open `certlm.msc` → **Trusted Root Certification Authorities** → **Certificates**: a certificate issued to `tolikopa.corp.local` must be there. Open the panel by its **name**: the IP is covered too, but other names are not. Firefox may use its own certificate store |
 | `tolikopa.corp.local` does not resolve | DNS cache, or no record | `ipconfig /flushdns`, then `Resolve-DnsName tolikopa.corp.local`. In **DNS Manager** (`dnsmgmt.msc`), check that the A record (or the `tolikopa.local` zone) exists. If you used `-skip-dns` or `-`, create it yourself |
 | Setup tool: `The DNS name ... already points elsewhere (...)` | A record with that name points to another address, or a CNAME/AAAA exists | Delete the old record, or choose another name the certificate covers, or run with `-skip-dns` and create the record yourself |
@@ -800,7 +806,7 @@ sudo docker compose -f ~/tolikopa/deploy/docker-compose.yml down -v
 sudo systemctl disable --now tolikopa-agent
 sudo rm -f /etc/systemd/system/tolikopa-agent.service
 sudo systemctl daemon-reload
-sudo rm -rf /opt/tolikopa /etc/tolikopa
+sudo rm -rf /opt/tolikopa /etc/tolikopa /var/lib/tolikopa
 
 # Finally, the code, secrets and certificate:
 sudo rm -rf ~/tolikopa

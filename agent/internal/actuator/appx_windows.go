@@ -15,6 +15,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/aliyalinkilic/tolikopa/agent/internal/winproc"
 )
 
 // Appx removal runs OUT OF PROCESS, in a short-lived child of this same exe.
@@ -298,14 +300,18 @@ func (h *appxHost) spawn() (*childProc, error) {
 	_ = windows.SetHandleInformation(inWrite, windows.HANDLE_FLAG_INHERIT, 0)
 	_ = windows.SetHandleInformation(outRead, windows.HANDLE_FLAG_INHERIT, 0)
 
-	si := &windows.StartupInfo{}
-	si.Cb = uint32(unsafe.Sizeof(*si))
-	si.Flags = windows.STARTF_USESTDHANDLES
-	si.StdInput = inRead
-	si.StdOutput = outWrite
 	// stderr is left unconnected on purpose: the worker's diagnostics must never
 	// be interleaved into the stdout protocol line, and a service has no console.
-	si.StdErr = 0
+	// The explicit handle list means the worker inherits ONLY inRead/outWrite,
+	// never a pipe end some other spawner (the fg helper) has open right now.
+	si, err := winproc.NewStartupInfo(inRead, outWrite, 0)
+	if err != nil {
+		_ = windows.CloseHandle(inRead)
+		_ = windows.CloseHandle(outWrite)
+		_ = windows.CloseHandle(inWrite)
+		_ = windows.CloseHandle(outRead)
+		return nil, err
+	}
 
 	appName := windows.StringToUTF16Ptr(h.exe)
 	// Fixed literal argv. Nothing from the policy, the catalog or the network is
@@ -313,8 +319,9 @@ func (h *appxHost) spawn() (*childProc, error) {
 	cmdline := windows.StringToUTF16Ptr(`"` + h.exe + `" ` + appxWorkerArg)
 
 	var pi windows.ProcessInformation
-	err := windows.CreateProcess(appName, cmdline, nil, nil, true,
-		windows.CREATE_NO_WINDOW, nil, nil, si, &pi)
+	err = windows.CreateProcess(appName, cmdline, nil, nil, true,
+		windows.CREATE_NO_WINDOW|winproc.Flags, nil, nil, si.Base(), &pi)
+	si.Close()
 
 	// The child owns its ends now, in both the success and failure cases.
 	_ = windows.CloseHandle(inRead)

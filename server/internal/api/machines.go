@@ -462,12 +462,27 @@ func (a *API) MachineEvents(c echo.Context) error {
 func (a *API) MachineAlerts(c echo.Context) error {
 	ctx := c.Request().Context()
 	id := c.Param("id")
-	from, to := parseRange(c)
-	sql := alertSelect + ` WHERE a.machine_id=$1 AND a.opened_at BETWEEN $2 AND $3`
-	args := []any{id, from, to}
+	// Unlike the series endpoints, from/to are OPTIONAL filters here and there is
+	// no 6-hour default: the panel asks for a machine's alerts without a window,
+	// and a still-open alert raised yesterday must not vanish from its page.
+	sql := alertSelect + ` WHERE a.machine_id=$1`
+	args := []any{id}
+	add := func(cond string, val any) {
+		args = append(args, val)
+		sql += " AND " + cond + "$" + itoa(len(args))
+	}
+	if v := c.QueryParam("from"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			add("a.opened_at>=", t)
+		}
+	}
+	if v := c.QueryParam("to"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			add("a.opened_at<=", t)
+		}
+	}
 	if status := c.QueryParam("status"); status != "" {
-		args = append(args, status)
-		sql += " AND a.status=$4"
+		add("a.status=", status)
 	}
 	sql += " ORDER BY a.opened_at DESC LIMIT 500"
 	rows, err := a.pool.Query(ctx, sql, args...)

@@ -52,12 +52,24 @@ type Sender struct {
 
 	trigger chan struct{}
 
+	// Touched only by the Run goroutine (tick/sendNow/drainSpool/finalFlush).
 	failCount   int
 	nextAttempt time.Time
+	// rejectLogged throttles the "server rejected a batch" log per HTTP status,
+	// so a persistent 4xx logs once per rejectLogEvery instead of every minute.
+	rejectLogged map[int]time.Time
 }
+
+// rejectLogEvery is the minimum gap between two identical 4xx rejection logs.
+const rejectLogEvery = time.Hour
 
 // New builds a Sender, pinning the configured CA if tls_ca_pem is set.
 func New(cfg *config.Config, machine model.Machine, log *slog.Logger) (*Sender, error) {
+	// Load already enforces this; re-checked here so no construction path can
+	// ever put the bearer token on a cleartext connection.
+	if err := config.ValidateBackendURL(cfg.BackendURL); err != nil {
+		return nil, err
+	}
 	tr := &http.Transport{
 		Proxy:               http.ProxyFromEnvironment,
 		TLSHandshakeTimeout: 15 * time.Second,
@@ -71,20 +83,38 @@ func New(cfg *config.Config, machine model.Machine, log *slog.Logger) (*Sender, 
 		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	}
 	return &Sender{
-		cfg:      cfg,
-		machine:  machine,
-		log:      log,
-		client:   &http.Client{Timeout: httpTimeout, Transport: tr},
-		url:      strings.TrimRight(cfg.BackendURL, "/") + "/api/v1/ingest",
+		cfg:     cfg,
+		machine: machine,
+		log:     log,
+		client: &http.Client{
+			Timeout:   httpTimeout,
+			Transport: tr,
+			// net/http keeps the Authorization header across a same-host redirect,
+			// even to http://. Never follow a redirect off TLS.
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if req.URL.Scheme != "https" {
+					return fmt.Errorf("refusing non-https redirect")
+				}
+				if len(via) >= 5 {
+					return fmt.Errorf("too many redirects")
+				}
+				return nil
+			},
+		},
+		url:      strings.TrimRight(strings.TrimSpace(cfg.BackendURL), "/") + "/api/v1/ingest",
 		spoolDir: config.SpoolDir(),
 		trigger:  make(chan struct{}, 1),
 	}, nil
 }
 
 // AddSample buffers one sample, triggering an early flush at the batch cap.
+// The buffer is bounded (drop-oldest) in case the sender goroutine is busy.
 func (s *Sender) AddSample(sm model.Sample) {
 	s.mu.Lock()
 	s.samples = append(s.samples, sm)
+	if over := len(s.samples) - maxBufferedSamples; over > 0 {
+		s.samples = append(s.samples[:0:0], s.samples[over:]...)
+	}
 	n := len(s.samples)
 	s.mu.Unlock()
 	if n >= maxBatchSamples {
@@ -92,23 +122,32 @@ func (s *Sender) AddSample(sm model.Sample) {
 	}
 }
 
-// AddEvents buffers crash/hang events.
+// AddEvents buffers crash/hang events. The buffer is bounded: once full, newer
+// events are dropped (a crash storm is already visible from what was kept).
 func (s *Sender) AddEvents(ev []model.Event) {
 	if len(ev) == 0 {
 		return
 	}
 	s.mu.Lock()
-	s.events = append(s.events, ev...)
+	if room := maxBufferedEvents - len(s.events); room > 0 {
+		if len(ev) > room {
+			ev = ev[:room]
+		}
+		s.events = append(s.events, ev...)
+	}
 	s.mu.Unlock()
 }
 
-// AddHealth buffers the latest SMART snapshot.
+// AddHealth buffers the latest SMART snapshot (bounded, newest kept).
 func (s *Sender) AddHealth(h []model.DiskHealth) {
 	if len(h) == 0 {
 		return
 	}
 	s.mu.Lock()
 	s.health = append(s.health, h...)
+	if over := len(s.health) - maxBufferedHealth; over > 0 {
+		s.health = append(s.health[:0:0], s.health[over:]...)
+	}
 	s.mu.Unlock()
 }
 
@@ -139,6 +178,7 @@ func (s *Sender) SetRemediation(r *model.RemediationReport) {
 	if r == nil {
 		return
 	}
+	r = capRemediation(r)
 	s.mu.Lock()
 	s.remediation = r
 	s.mu.Unlock()
@@ -155,18 +195,31 @@ func (s *Sender) SetPolicyHandler(f func(*model.RemediationPolicy)) {
 	s.mu.Unlock()
 }
 
+// maxFocusSeconds caps one app's accumulated seconds between flushes; far above
+// any real value (a flush interval is minutes), it only rules out int overflow
+// from a hostile helper.
+const maxFocusSeconds = 7 * 24 * 3600
+
 // AddAppFocus accumulates foreground (active-use) seconds for one application,
-// keyed by its base NAME only. Flushed with the next envelope.
+// keyed by its base NAME only. Flushed with the next envelope. Names come from
+// the user-context helper and are re-validated here; the accumulator is bounded
+// (a new name is ignored once maxTrackedApps distinct names are held), and the
+// envelope later keeps only the server's row cap, by most seconds.
 func (s *Sender) AddAppFocus(name string, seconds int) {
-	if name == "" || seconds <= 0 {
+	n, ok := collector.ValidAppName(name)
+	if !ok || seconds <= 0 {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.appFocus == nil {
 		s.appFocus = map[string]int{}
 	}
-	s.appFocus[name] += seconds
-	s.mu.Unlock()
+	cur, seen := s.appFocus[n]
+	if !seen && len(s.appFocus) >= maxTrackedApps {
+		return
+	}
+	s.appFocus[n] = min(cur+min(seconds, maxFocusSeconds), maxFocusSeconds)
 }
 
 func (s *Sender) signal() {
@@ -228,36 +281,106 @@ func (s *Sender) sendNow() error {
 		return err
 	}
 
-	samples, events, health, upd, focus, battery, rem := s.swap()
-	env := s.envelope(samples, events, health, upd, focus, battery, rem)
+	// The buffer may hold more than one envelope's worth (e.g. after a long spool
+	// drain); chunk it so no envelope can exceed a server cap.
+	chunks := chunk(s.swap())
+	for i, p := range chunks {
+		// applyPolicy=true: this is the LIVE path, so a directive in the
+		// response is fresh and may be acted on.
+		if err := s.sendParts(p, true, 0); err != nil {
+			for _, rest := range chunks[i+1:] {
+				s.spillParts(rest, 0)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// sendParts delivers one envelope's content. A body over maxBodyBytes, or one
+// the server answers 413 for, is split and the halves delivered separately, so
+// one oversized part can never take the rest of the batch down with it. On a
+// retryable failure (network / 429 / 5xx) the undelivered content is spooled and
+// the error returned so the caller backs off.
+func (s *Sender) sendParts(p parts, applyPolicy bool, depth int) error {
+	env := s.envelope(p)
 	body, err := json.Marshal(env)
 	if err != nil {
 		s.log.Error("marshal envelope", "err", err.Error())
 		return nil // unrecoverable for this batch; drop
 	}
+	if len(body) > maxBodyBytes {
+		return s.sendSplit(p, applyPolicy, depth)
+	}
+	return s.sendBody(env.BatchID, body, p, applyPolicy, depth)
+}
 
-	// applyPolicy=true: this is the LIVE path, so a directive in the response is
-	// fresh and may be acted on.
-	status, pol, perr := s.post(env.BatchID, body, true)
+// sendBody posts an already-marshalled envelope whose content is p.
+func (s *Sender) sendBody(batchID string, body []byte, p parts, applyPolicy bool, depth int) error {
+	status, pol, perr := s.post(batchID, body, applyPolicy)
 	switch {
 	case perr != nil:
-		if hasContent(samples, events, health, upd, focus, battery, rem) {
-			s.writeSpool(env.BatchID, body)
+		if !p.empty() {
+			s.writeSpool(batchID, body)
 		}
 		return perr
 	case status >= 200 && status < 300:
-		s.deliverPolicy(pol)
+		if applyPolicy {
+			s.deliverPolicy(pol)
+		}
 		return nil
-	case status == 401 || status == 403 || (status >= 400 && status < 500 && status != 429):
-		// Bad token / bad request: stop retrying this batch.
-		s.log.Error("ingest rejected (4xx), dropping batch", "status", status)
+	case status == http.StatusRequestEntityTooLarge:
+		// The agent's own caps should make this unreachable; if a server with
+		// tighter caps answers it anyway, deliver what fits rather than dropping
+		// metrics, events and audit wholesale every minute.
+		s.logReject(status, "ingest rejected batch as too large (413), splitting")
+		return s.sendSplit(p, applyPolicy, depth)
+	case status >= 400 && status < 500 && status != http.StatusTooManyRequests:
+		// Bad token / bad request: retrying this batch cannot help; drop it.
+		s.logReject(status, "ingest rejected (4xx), dropping batch")
 		return nil
 	default: // 429 / 5xx
-		if hasContent(samples, events, health, upd, focus, battery, rem) {
-			s.writeSpool(env.BatchID, body)
+		if !p.empty() {
+			s.writeSpool(batchID, body)
 		}
 		return fmt.Errorf("ingest status %d", status)
 	}
+}
+
+// sendSplit delivers p as two (or more, recursively) smaller batches, each with
+// a fresh batch id. Content that cannot be divided further is dropped and logged.
+func (s *Sender) sendSplit(p parts, applyPolicy bool, depth int) error {
+	halves := p.split()
+	if depth >= maxSplitDepth || halves == nil {
+		s.log.Warn("dropping batch the server will not accept even after splitting",
+			"samples", len(p.samples), "events", len(p.events), "app_focus", len(p.focus))
+		return nil
+	}
+	for i, h := range halves {
+		if err := s.sendParts(h, applyPolicy, depth+1); err != nil {
+			for _, rest := range halves[i+1:] {
+				s.spillParts(rest, depth+1)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// logReject logs a 4xx rejection at Error at most once per rejectLogEvery per
+// status code (Debug otherwise), so a persistent rejection is visible without
+// flooding the log every post interval.
+func (s *Sender) logReject(status int, msg string) {
+	now := time.Now()
+	if s.rejectLogged == nil {
+		s.rejectLogged = map[int]time.Time{}
+	}
+	if last, ok := s.rejectLogged[status]; ok && now.Sub(last) < rejectLogEvery {
+		s.log.Debug(msg, "status", status)
+		return
+	}
+	s.rejectLogged[status] = now
+	s.log.Error(msg, "status", status)
 }
 
 // deliverPolicy hands a freshly received policy to the registered handler. The
@@ -291,45 +414,79 @@ func (s *Sender) finalFlush() {
 	}
 }
 
-// swap atomically takes ownership of the current buffers.
-func (s *Sender) swap() (samples []model.Sample, events []model.Event, health []model.DiskHealth, upd *model.UpdateStatus, focus []model.AppFocus, battery *model.Battery, rem *model.RemediationReport) {
+// swap atomically takes ownership of the current buffers. app_focus is reduced
+// to the server's row cap here, keeping the apps with the most seconds.
+func (s *Sender) swap() parts {
 	s.mu.Lock()
-	samples, events, health, upd, battery, rem = s.samples, s.events, s.health, s.updateSts, s.battery, s.remediation
-	for name, sec := range s.appFocus {
-		focus = append(focus, model.AppFocus{Name: name, Seconds: sec})
+	p := parts{
+		samples: s.samples,
+		events:  s.events,
+		health:  s.health,
+		upd:     s.updateSts,
+		focus:   topFocus(s.appFocus),
+		battery: s.battery,
+		rem:     s.remediation,
 	}
 	s.samples, s.events, s.health, s.updateSts, s.battery, s.appFocus, s.remediation = nil, nil, nil, nil, nil, nil, nil
 	s.mu.Unlock()
-	return
+	return p
 }
 
-// spill writes buffers to the spool (used during backoff to bound memory).
-func (s *Sender) spill(samples []model.Sample, events []model.Event, health []model.DiskHealth, upd *model.UpdateStatus, focus []model.AppFocus, battery *model.Battery, rem *model.RemediationReport) {
-	if !hasContent(samples, events, health, upd, focus, battery, rem) {
+// spill writes buffers to the spool (used during backoff to bound memory),
+// chunked exactly like a live send so a replay can never exceed a server cap.
+func (s *Sender) spill(p parts) {
+	for _, c := range chunk(p) {
+		s.spillParts(c, 0)
+	}
+}
+
+// spillParts spools one envelope's content, splitting it if it marshals over
+// maxBodyBytes.
+func (s *Sender) spillParts(p parts, depth int) {
+	if p.empty() {
 		return
 	}
-	env := s.envelope(samples, events, health, upd, focus, battery, rem)
-	if body, err := json.Marshal(env); err == nil {
-		s.writeSpool(env.BatchID, body)
+	env := s.envelope(p)
+	body, err := json.Marshal(env)
+	if err != nil {
+		return
 	}
+	if len(body) > maxBodyBytes {
+		if halves := p.split(); halves != nil && depth < maxSplitDepth {
+			for _, h := range halves {
+				s.spillParts(h, depth+1)
+			}
+			return
+		}
+		s.log.Warn("dropping oversize batch instead of spooling it", "bytes", len(body))
+		return
+	}
+	s.writeSpool(env.BatchID, body)
 }
 
-func (s *Sender) envelope(samples []model.Sample, events []model.Event, health []model.DiskHealth, upd *model.UpdateStatus, focus []model.AppFocus, battery *model.Battery, rem *model.RemediationReport) model.Envelope {
-	// The machine block is static identity captured at startup, except for the
-	// LAN address, which DHCP and Wi-Fi/Ethernet switches change at will — so it
-	// is re-read per batch (a handful of syscalls; cheaper than one sample).
-	machine := s.machine
-	machine.IPAddrs = collector.LocalIPv4s()
+func (s *Sender) envelope(p parts) model.Envelope {
+	var machine model.Machine
+	if p.machine != nil {
+		// Re-split spooled content keeps the identity it was collected under.
+		machine = *p.machine
+	} else {
+		// The machine block is static identity captured at startup, except for
+		// the LAN address, which DHCP and Wi-Fi/Ethernet switches change at will
+		// — so it is re-read per batch (a handful of syscalls; cheaper than one
+		// sample).
+		machine = s.machine
+		machine.IPAddrs = collector.LocalIPv4s()
+	}
 	return model.Envelope{
 		BatchID:      uuid.NewString(),
 		Machine:      machine,
-		Samples:      samples,
-		Events:       events,
-		DiskHealth:   health,
-		UpdateStatus: upd,
-		AppFocus:     focus,
-		Battery:      battery,
-		Remediation:  rem,
+		Samples:      p.samples,
+		Events:       p.events,
+		DiskHealth:   p.health,
+		UpdateStatus: p.upd,
+		AppFocus:     p.focus,
+		Battery:      p.battery,
+		Remediation:  p.rem,
 		SentAt:       time.Now().UTC(),
 	}
 }
@@ -378,10 +535,6 @@ func (s *Sender) post(batchID string, body []byte, applyPolicy bool) (int, *mode
 	// Drain whatever is left so the connection can be reused.
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	return resp.StatusCode, policy, nil
-}
-
-func hasContent(samples []model.Sample, events []model.Event, health []model.DiskHealth, upd *model.UpdateStatus, focus []model.AppFocus, battery *model.Battery, rem *model.RemediationReport) bool {
-	return len(samples) > 0 || len(events) > 0 || len(health) > 0 || upd != nil || len(focus) > 0 || battery != nil || rem != nil
 }
 
 func backoffFor(fails int) time.Duration {

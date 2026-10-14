@@ -17,7 +17,10 @@ abused to covertly collect data (prevented architecturally).
 - **Default:** a single ingest token shared by all clients (to keep GPO distribution simple).
 - **Hardening (implemented):**
   - Sent only over TLS.
-  - Stored **hashed** on the server (not in plain text), rotatable (`.env` → `INGEST_TOKEN`).
+  - Kept in plain text in `deploy/.env` (mode 600) and in the api container's environment, because
+    the server must put it into the agents' `config.json` and the setup tool's bundle; incoming
+    requests are compared against it in constant time. Rotatable (`.env` → `INGEST_TOKEN`), after
+    which the bundle must be redistributed.
   - **LAN IP allowlist** in Caddy for `/api/v1/ingest`: all RFC 1918 private ranges
     (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) + loopback. So it is a "not from the
     internet" filter, not "our own subnet"; every address on the same private network can reach
@@ -299,6 +302,11 @@ creates the account with `docker compose exec -T api /server admin init-admin <u
 
 - The password is read **from stdin**; it is not written to the command line, `.env` or any log.
   The password rule (≥10 characters, ≤72 bytes) is enforced.
+- Unattended installs should pass it as `TOLIKOPA_ADMIN_PASSWORD_FILE` — a regular file owned by
+  root with no group/other permissions; `setup.sh` refuses anything else. The plain
+  `TOLIKOPA_ADMIN_PASSWORD` variable still works, but `sudo VAR=... ./setup.sh` exposes the value
+  on sudo's command line (`ps`) and in the shell history. Either way `setup.sh` unsets the
+  variable so nothing it starts inherits it.
 - The command works only **while there is no panel account at all** (under the same advisory lock
   as the setup code); afterwards it refuses. So it is not a way to add a second administrator to an
   existing installation.
@@ -364,7 +372,10 @@ database backup would directly mean domain admin. Therefore:
   the token" above).
 - When adding the panel's DNS record it does **not overwrite** an existing record: if the name
   points to another address (or a CNAME/AAAA exists) it stops. The DNS name must be one of the
-  names covered by the panel certificate.
+  names covered by the panel certificate. A name that no existing zone holds would need a new
+  zone (which answers for that whole name space): that is only done after the admin types the
+  zone name interactively; `-yes` / `-dry-run` refuse it, and `gpo.ps1` refuses to create a zone
+  unless the exe passes the confirmation.
 - It adds the certificate to the trusted roots via GPO only if it is a self-signed server
   certificate that is not a CA (see "TLS" below); `-remove` removes this trust together with the
   GPO.
@@ -421,12 +432,67 @@ only be `https` — the token cannot be configured to be sent over plain HTTP.
 
 ## Container boundaries
 
-- The API container runs as a **non-root** user.
+- The API container runs as a **non-root** user (65534) with **every** Linux capability dropped
+  (`cap_drop: [ALL]`).
+- Caddy (web) drops every capability except `NET_BIND_SERVICE` (it binds 80/443 as root inside the
+  container); it reads the key as its owner, so `setup.sh` keeps `deploy/tls/*` owned by root.
+- All three services run with `no-new-privileges` (no gain through setuid binaries or file
+  capabilities). The database keeps Docker's default capability set: the postgres entrypoint
+  starts as root, fixes data-directory ownership and switches to the `postgres` user.
+- Only the web container publishes ports. **Docker-published ports bypass ufw**: Docker's iptables
+  rules are evaluated before ufw's, so a ufw rule does not restrict who reaches 80/443. Restrict
+  with `BIND_ADDR=<server IP>` in `.env` (publishes on that address only), the `DOCKER-USER`
+  iptables chain, or the network firewall ([DEPLOYMENT.md](DEPLOYMENT.md#firewall-and-published-ports)).
 - The TLS private key (`deploy/tls/tolikopa.key`) is mounted **only** into the web (Caddy)
   container, read-only. Only the certificate file is mounted into the API
   (`deploy/tls/tolikopa.crt` → `/tls/tolikopa.crt`, read-only; `TLS_CERT_FILE`, defaulting to this
   path). Even if the API is compromised it cannot reach the private key. The API passes through
   only the `CERTIFICATE` blocks from the file.
+
+## Panel response headers (Caddy)
+
+`deploy/caddy/Caddyfile` sends on every response:
+
+- **`Content-Security-Policy`** (enforced): `default-src 'self'; script-src 'self' 'sha256-…';
+  style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:;
+  connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none';
+  form-action 'self'`. Derived from the build: the only inline script is the theme/language
+  bootstrap in `web/index.html`, allowed **by its hash**; everything else is same-origin bundles,
+  self-hosted fonts, same-origin `fetch` and the same-origin `wss://…/ws` socket (`connect-src
+  'self'`). There is no `eval`/`new Function` in the bundles. `style-src 'unsafe-inline'` is
+  needed for the inline styles React, motion and Recharts set; scripts stay hash-only.
+  **Editing that inline script changes its hash**: put the new `sha256-…` into the Caddyfile.
+  `web/Dockerfile` recomputes the hash of every inline script in `dist/index.html` and **fails the
+  image build** if one is missing from the Caddyfile.
+- **`Strict-Transport-Security: max-age=31536000`** — browsers honour it only over a connection
+  whose certificate they trust (the GPO-distributed one) and never for an IP address; afterwards a
+  certificate warning for the panel's name can no longer be clicked through.
+- `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`;
+  the `Server` header is removed.
+
+## Build supply chain
+
+The API image also builds `tolikopa-agent.exe`, which runs as SYSTEM on every PC, so the build is
+pinned end to end:
+
+- Base images by tag **and** digest (`golang`, `node`, `caddy`, `alpine` in the Dockerfiles; the
+  TimescaleDB image in compose). Updating = replacing both (`docker buildx imagetools inspect`).
+- Go: `go.mod`/`go.sum` are committed and complete; the build runs `go mod download` (verified
+  against `go.sum` and the checksum database), `go mod verify` and `go build -mod=readonly`, with
+  `GOTOOLCHAIN=local`. There is **no `go mod tidy` at build time** — it would resolve a new import
+  to whatever version is latest at that moment. After changing imports, run `go mod tidy` locally
+  and commit both files.
+- npm: `npm ci` installs exactly `package-lock.json` (integrity hashes) and fails if it does not
+  match `package.json`.
+
+## The server's own Linux agent
+
+`setup.sh` installs it as the systemd unit `tolikopa-agent`, running as root (it reads every
+process's `/proc` entry and `statfs()`s every mount) but sandboxed: `ProtectSystem=strict`,
+`ProtectHome=read-only`, `PrivateTmp=yes`, `NoNewPrivileges=yes`, and the only writable path
+`ReadWritePaths=/var/lib/tolikopa` (state, spool, logs). `/etc/tolikopa/config.json` (600) is read
+only. The same data is reported as without the sandbox (verified: mounts, processes, logged-on
+user from `/run/systemd/sessions`).
 
 ## TLS
 
@@ -446,15 +512,20 @@ itself: the only thing that can be impersonated with a stolen key is the panel's
 
 **The setup tool refuses to distribute a CA.** `tolikopa-setup.exe` adds the certificate to the GPO
 only if all of these conditions hold: a single certificate, self-signed, not a CA (no CA flag or
-`keyCertSign`), with `serverAuth` usage, containing at least one DNS name, not expired. If they do
-not hold, it prints the reason and does not distribute; so even a compromised server that puts a CA
-into `config.json` cannot plant a trusted CA in the domain. The trust is part of the GPO: when the
+`keyCertSign`), with `serverAuth` usage, exactly one DNS name and no wildcard, at most one IP
+address, bound to the bundle's `server_url` (the DNS name equals its host, or — for an IP
+`server_url` — the IP address equals it), not expired. If they do not hold, it prints the reason
+and does not distribute; so even a compromised server that puts a CA into `config.json` cannot
+plant a trusted CA in the domain, nor a leaf for `*.corp.example.com` or someone else's site. The trust is part of the GPO: when the
 certificate changes, the old thumbprints are removed from the GPO, and when the GPO is removed the
 trust goes too.
 
 **Certificate continuity.** Because the agents pin the certificate and the computers trust it,
 `setup.sh` on an existing installation (`deploy/.env` present) does not generate a new certificate
-if `deploy/tls` is missing; it stops. `deploy/tls/` must be backed up together with `deploy/.env`.
+if `deploy/tls` is missing; it stops. On a first run the certificate is created **before**
+`deploy/.env` is written, so an interrupted first run never leaves that state behind; a
+certificate already present on a first run is reused (never replaced) if it covers the names given,
+otherwise the script stops. `deploy/tls/` must be backed up together with `deploy/.env`.
 
 ## Credential management
 
@@ -481,7 +552,7 @@ positive. Without a signature, a Defender exclusion / ASR exemption via GPO may 
 
 ## Hardening checklist
 
-- [ ] `.env` file permissions `600`, owned by the deploy user.
+- [ ] `.env` file permissions `600`, owned by root (`setup.sh` creates it so).
 - [ ] Caddy ingest allowlist active.
 - [ ] (Optional) A custom image built with `caddy-ratelimit` and an ingest rate limit added.
 - [ ] First administrator created via `setup.sh` (console) or the setup code (or the first admin password in `.env` changed).
@@ -491,7 +562,8 @@ positive. Without a signature, a Defender exclusion / ASR exemption via GPO may 
 - [ ] 2FA enabled on administrator accounts; recovery codes stored somewhere safe.
 - [ ] (Recommended) "Require Two-Factor Authentication" turned on in the general settings.
 - [ ] At least two active administrator accounts exist (so if one is locked out, the other can reset it).
-- [ ] Ubuntu `ufw`: only 443 + SSH open.
+- [ ] Ubuntu `ufw`: only 443 + SSH open — and remember ufw does not filter Docker-published ports: use `BIND_ADDR`, `DOCKER-USER` or the network firewall for 80/443.
+- [ ] Panel answers with `Content-Security-Policy` and `Strict-Transport-Security` (`curl -sI --cacert deploy/tls/tolikopa.crt https://<name>/`).
 - [ ] Ubuntu SSH password login disabled (key-based).
 - [ ] DB port (5432) only on the compose internal network; not exposed to the host.
 - [ ] Shared passwords rotated.

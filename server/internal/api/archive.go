@@ -38,8 +38,8 @@ func (a *API) setArchived(c echo.Context, archive bool) error {
 	ctx := c.Request().Context()
 
 	var body model.MachineArchiveRequest
-	if err := c.Bind(&body); err != nil {
-		return apierr.BadRequest("invalid request body")
+	if err := apierr.Bind(c, &body); err != nil {
+		return err
 	}
 	ids := make([]string, 0, len(body.MachineIDs))
 	seen := make(map[string]struct{}, len(body.MachineIDs))

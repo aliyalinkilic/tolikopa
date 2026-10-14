@@ -1,4 +1,11 @@
-# Tolikopa — IT Fleet Monitoring
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
+    <img src="docs/logo.svg" alt="ToliKOPA" width="300">
+  </picture>
+</p>
+
+# ToliKOPA — IT Fleet Monitoring
 
 A lightweight, privacy-respecting system that centrally monitors the **hardware health and general
 usage** of domain-joined computers. It consists of a small agent pushed silently to every PC via
@@ -57,8 +64,8 @@ Admin browser  ◄── React panel (live WebSocket)
 
 ## Installation
 
-1. **Ubuntu server:** install Docker and git, `git clone` this repository, run `sudo ./setup.sh`
-   (`--lang en` for English). It asks for the panel's DNS name, the server's IP and the first
+1. **Ubuntu server:** install Docker and git, `git clone` this repository, run `sudo ./setup.sh`.
+   It asks for the language (Turkish / English), the panel's DNS name, the server's IP and the first
    admin, then builds and starts everything.
 2. **First sign-in:** open `https://<server IP>`, check the certificate fingerprint, sign in.
 3. **Setup wizard:** enter the server address and the domain details, download `tolikopa-setup.exe`.

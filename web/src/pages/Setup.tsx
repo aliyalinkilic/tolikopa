@@ -135,6 +135,7 @@ function StatusSection({ state }: { state: SetupState }) {
       <Card>
         <CardHeader
           title={t('setup.status.fleetTitle')}
+          description={t('setup.status.fleetNote')}
           action={
             <Badge tone="neutral">
               <span className="tabular">{t('common.machines', { count: fleet?.total ?? 0 })}</span>

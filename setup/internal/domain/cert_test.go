@@ -30,6 +30,9 @@ func makeCert(t *testing.T, tmpl *x509.Certificate, parent *x509.Certificate, pa
 	return c, key, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
+// serverURL is the manifest's server_url the test certificates belong to.
+const serverURL = "https://tolikopa.corp.local"
+
 func leafTemplate() *x509.Certificate {
 	return &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -46,7 +49,7 @@ func leafTemplate() *x509.Certificate {
 
 func TestSelfSignedLeafIsTrustable(t *testing.T) {
 	_, _, p := makeCert(t, leafTemplate(), nil, nil)
-	pc, err := ParsePanelCert(p)
+	pc, err := ParsePanelCert(p, serverURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +77,7 @@ func TestCertificateAuthorityIsRefused(t *testing.T) {
 	tmpl.IsCA = true
 	tmpl.KeyUsage |= x509.KeyUsageCertSign
 	_, _, p := makeCert(t, tmpl, nil, nil)
-	pc, err := ParsePanelCert(p)
+	pc, err := ParsePanelCert(p, serverURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +95,7 @@ func TestIssuedCertificateIsRefused(t *testing.T) {
 	leaf := leafTemplate()
 	leaf.SerialNumber = big.NewInt(2)
 	_, _, p := makeCert(t, leaf, ca, caKey)
-	pc, err := ParsePanelCert(p)
+	pc, err := ParsePanelCert(p, serverURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +112,7 @@ func TestExpiredOrClientCertificateIsRefused(t *testing.T) {
 	client.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 	for name, tmpl := range map[string]*x509.Certificate{"expired": expired, "client": client} {
 		_, _, p := makeCert(t, tmpl, nil, nil)
-		pc, err := ParsePanelCert(p)
+		pc, err := ParsePanelCert(p, serverURL)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +120,75 @@ func TestExpiredOrClientCertificateIsRefused(t *testing.T) {
 			t.Errorf("%s certificate accepted", name)
 		}
 	}
-	if _, err := ParsePanelCert([]byte("not pem")); err == nil {
+	if _, err := ParsePanelCert([]byte("not pem"), serverURL); err == nil {
 		t.Error("garbage accepted")
+	}
+}
+
+// The names matter as much as the shape: a self-signed leaf for someone else's
+// site, once trusted by every PC, is as dangerous as a CA for that site.
+func TestCertificateNamesAreChecked(t *testing.T) {
+	cases := map[string]struct {
+		mutate    func(*x509.Certificate)
+		serverURL string
+	}{
+		"wildcard": {func(c *x509.Certificate) { c.DNSNames = []string{"*.corp.local"} }, "https://tolikopa.corp.local"},
+		"wildcard beside the server name": {func(c *x509.Certificate) {
+			c.DNSNames = []string{"tolikopa.corp.local", "*.corp.local"}
+		}, "https://tolikopa.corp.local"},
+		"foreign site": {func(c *x509.Certificate) { c.DNSNames = []string{"login.microsoftonline.com"} }, "https://tolikopa.corp.local"},
+		"two names": {func(c *x509.Certificate) {
+			c.DNSNames = []string{"tolikopa.corp.local", "login.microsoftonline.com"}
+		}, "https://tolikopa.corp.local"},
+		"no name": {func(c *x509.Certificate) { c.DNSNames = nil }, "https://tolikopa.corp.local"},
+		"two IPs": {func(c *x509.Certificate) {
+			c.IPAddresses = []net.IP{net.ParseIP("10.0.0.10"), net.ParseIP("10.0.0.11")}
+		}, "https://tolikopa.corp.local"},
+		"bad name":                 {func(c *x509.Certificate) { c.DNSNames = []string{"tolikopa"} }, "https://tolikopa"},
+		"other server name":        {func(*x509.Certificate) {}, "https://other.corp.local"},
+		"server IP not in cert":    {func(*x509.Certificate) {}, "https://10.0.0.11"},
+		"server IP, cert has none": {func(c *x509.Certificate) { c.IPAddresses = nil }, "https://10.0.0.10"},
+		"no server_url":            {func(*x509.Certificate) {}, ""},
+	}
+	for name, tc := range cases {
+		tmpl := leafTemplate()
+		tc.mutate(tmpl)
+		_, _, p := makeCert(t, tmpl, nil, nil)
+		pc, err := ParsePanelCert(p, tc.serverURL)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if pc.Trustable {
+			t.Errorf("%s: accepted for distribution", name)
+		} else if pc.Reason == "" {
+			t.Errorf("%s: refused without a reason", name)
+		}
+	}
+}
+
+// What setup.sh generates must keep working: one name chosen by the admin, inside
+// the AD domain or not, plus the server's address; server_url by name or by IP.
+func TestSupportedCertificateShapes(t *testing.T) {
+	cases := map[string]struct {
+		mutate    func(*x509.Certificate)
+		serverURL string
+	}{
+		"name in the domain":      {func(*x509.Certificate) {}, "https://tolikopa.corp.local"},
+		"name outside the domain": {func(c *x509.Certificate) { c.DNSNames = []string{"tolikopa.local"} }, "https://tolikopa.local:8443"},
+		"case-insensitive":        {func(*x509.Certificate) {}, "https://TOLIKOPA.corp.local/"},
+		"no IP":                   {func(c *x509.Certificate) { c.IPAddresses = nil }, "https://tolikopa.corp.local"},
+		"server by IP":            {func(*x509.Certificate) {}, "https://10.0.0.10"},
+	}
+	for name, tc := range cases {
+		tmpl := leafTemplate()
+		tc.mutate(tmpl)
+		_, _, p := makeCert(t, tmpl, nil, nil)
+		pc, err := ParsePanelCert(p, tc.serverURL)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !pc.Trustable {
+			t.Errorf("%s: refused: %s", name, pc.Reason)
+		}
 	}
 }

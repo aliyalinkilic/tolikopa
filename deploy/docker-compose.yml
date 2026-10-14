@@ -8,7 +8,8 @@ name: tolikopa
 
 services:
   db:
-    image: timescale/timescaledb:2.27.0-pg17   # fallback tag if unavailable: latest-pg17
+    # Tag for humans, digest is what Docker pulls (docker buildx imagetools inspect <tag>).
+    image: timescale/timescaledb:2.27.0-pg17@sha256:c2b230fd8343c713c6003d17d18b00237674532794372a44fe845d4ec3121f65
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-tolikopa}
       POSTGRES_DB: ${POSTGRES_DB:-tolikopa}
@@ -22,6 +23,10 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+    # The postgres entrypoint starts as root, chowns the data dir and drops to the
+    # postgres user (gosu: setuid syscalls, no setuid binary), so it keeps Docker's
+    # default capabilities; no-new-privileges still blocks setuid/file-cap gains.
+    security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
 
   api:
@@ -72,6 +77,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    # Runs as 65534 and needs no capability at all.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     restart: unless-stopped
 
   web:
@@ -84,9 +92,13 @@ services:
       SERVER_HOST: ${SERVER_HOST:-localhost}
       DEFAULT_SNI: ${DEFAULT_SNI:-localhost}
       TZ: ${TZ:-Europe/Istanbul}
+    # Docker publishes these with its own iptables rules, which take effect BEFORE
+    # ufw: a ufw rule does not restrict them. To listen on one interface only, set
+    # BIND_ADDR in .env to that interface's IP. Unset = plain "443:443" (all IPv4
+    # and IPv6 addresses, exactly as before).
     ports:
-      - "80:80"
-      - "443:443"
+      - "${BIND_ADDR:+${BIND_ADDR}:}80:80"
+      - "${BIND_ADDR:+${BIND_ADDR}:}443:443"
     volumes:
       - caddy_data:/data
       - caddy_config:/config
@@ -99,6 +111,12 @@ services:
           create_host_path: false
     depends_on:
       - api
+    # Caddy runs as root inside the container only to bind 80/443: every other
+    # capability is dropped. It reads the key as its owner (root, mode 600), which
+    # needs no CAP_DAC_OVERRIDE.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
     restart: unless-stopped
 
 volumes:

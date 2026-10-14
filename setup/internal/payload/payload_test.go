@@ -44,6 +44,7 @@ func TestValidate(t *testing.T) {
 		"setup incomplete": func(m *Manifest) { m.Files = m.Files[:2] },
 		"version escape":   func(m *Manifest) { m.AgentVersion = "2.0.0\x1b[2J" },
 		"url scheme":       func(m *Manifest) { m.ServerURL = "file://x" },
+		"url plain http":   func(m *Manifest) { m.ServerURL = "http://tolikopa.corp.example.com" },
 		"url userinfo":     func(m *Manifest) { m.ServerURL = "https://a@evil.example" },
 		"url control":      func(m *Manifest) { m.ServerURL = "https://x\r\nOK" },
 		"url unicode":      func(m *Manifest) { m.ServerURL = "https://tolikopa.еxample" },

@@ -67,6 +67,13 @@ itself from `code` (+ `params`). For an unknown `code`, `message` may be shown. 
 | `server_busy` | 429 | ingest backpressure (`Retry-After`) |
 | `server_error` | 5xx | server error |
 
+**Request bodies are strict.** Every JSON write endpoint (except the agent ingest) decodes its
+body strictly: an empty body, a key the endpoint does not declare (e.g. the fields wrapped in an
+extra object), a value of the wrong JSON type, or trailing data after the document is
+`400 invalid_request`, with `params.field` naming the offending key where there is one; a
+non-JSON `Content-Type` is `415 unsupported_media_type`. A partial-update endpoint additionally
+rejects a body that names none of its fields. Nothing is ever "accepted" while being ignored.
+
 ---
 
 ## 1. Agent ingest
@@ -111,6 +118,14 @@ itself from `code` (+ `params`). For an unknown `code`, `message` may be shown. 
   "sent_at": "2026-07-03T09:01:00Z"
 }
 ```
+
+Further optional keys (all mirrored field-for-field in `agent/internal/model` and
+`server/internal/model/ingest.go`; `server/internal/model/ingest_parity_test.go` fails on any
+drift): `machine.cpu_model`, `machine.cpu_cores`;
+`update_status: {pending_count, reboot_pending, last_search, last_install, checked_at}` (counts and
+timestamps only, `-1` = unknown); `app_focus: [{name, seconds}]` (foreground application base name
+only); `battery: {present, percent, ac_connected, charging, design_capacity, full_charge_capacity,
+health_pct, cycle_count, checked_at}` (`-1` = unknown).
 
 - **Validation:** `machine_id` is required; a `ts` later than `now()+5min` or earlier than
   `now()-7d` is rejected; `cpu_pct` is clamped to 0-100; size limits (≤240 samples, ≤20 disks,
@@ -199,7 +214,7 @@ other sessions are unaffected.
 | Endpoint | Body | Response |
 |----|-------|-------|
 | `PUT  /api/me/profile` | `{display_name}` (≤80 characters; empty = clear) | `204` |
-| `PUT  /api/me/prefs` | `{theme?, lang?}` | `204` |
+| `PUT  /api/me/prefs` | `{theme?, lang?}` (at least one; any other key → `invalid_request`) | `204` |
 | `PUT  /api/me/password` | `{current_password, new_password}` | `204` + renewed cookie |
 | `POST /api/me/2fa/setup` | `{password}` | `{secret, otpauth_url}` |
 | `POST /api/me/2fa/enable` | `{code}` | `{recovery_codes: [10 × "xxxxx-xxxxx"]}` + renewed cookie |
@@ -235,7 +250,7 @@ other sessions are unaffected.
 |----|-------|---------------|
 | `GET /api/settings/public` | **none** (for the login page) | `{org_name, default_lang, version, require_2fa, needs_admin, setup_complete}` (`require_2fa` §2.4; the last two §11) |
 | `GET /api/admin/settings/general` | admin | `{org_name, default_lang, require_2fa}` |
-| `PUT /api/admin/settings/general` | admin | same body → `204` (a field that is not sent is unchanged) |
+| `PUT /api/admin/settings/general` | admin | same body → `204` (a field that is not sent is unchanged; at least one must be sent) |
 
 `org_name` ≤120 characters (default `""`), `default_lang ∈ {tr,en}` (default `tr`),
 `require_2fa` boolean (default `false`). `default_lang` is also the language of alert e-mails and of
@@ -272,8 +287,8 @@ All endpoints below require the session cookie. Those that require `role=admin` 
 
 | Endpoint | Parameters | Response |
 |----|--------------|-------|
-| `GET /api/fleet` | `status=online\|offline`, `user=`, `q=` | `FleetMachine[]` |
-| `GET /api/fleet/summary` | — | `FleetSummary` (online/offline/active/**idle** counts, alert distribution, avg. CPU/RAM) |
+| `GET /api/fleet` | `status=online\|offline`, `user=`, `q=` (hostname / machine id substring), `tag=` (machine group tag) | `FleetMachine[]` |
+| `GET /api/fleet/summary` | — | `FleetSummary` (online/offline/active/**idle** counts, alert distribution keyed by `warning`/`critical`, `avg_cpu` 0-100, `avg_mem` **percent 0-100** — unlike `FleetOverview.avg_mem`, which is a 0-1 ratio) |
 | `GET /api/fleet/overview` | — | `FleetOverview` (home dashboard; see below) |
 
 `FleetMachine`: `{machine_id,hostname,kind,online,cpu_pct,mem_ratio,disk_min_free_pct,logon_user,
@@ -307,7 +322,8 @@ The single-shot payload of the home dashboard. Live parts come **only from `mach
 ```
 
 Meanings: `totals` from `machine_live` (`online = now()-ts < OFFLINE_WARN`; `in_use` = online +
-`session_state=active`; `idle` and `locked` likewise). `top_cpu`: online machines, current CPU
+`session_state=active`; `idle` and `locked` likewise — Linux hosts count toward `total`/`online`
+but never toward these three, since their "active" only means a logind/SSH session exists). `top_cpu`: online machines, current CPU
 descending. `critical_mem`: online + `mem_ratio ≥ 0.90`, descending.
 
 **Health score formula:** `score = max(0, 100 − Σ penalty)`. Only issues with `count>0` are
@@ -337,9 +353,16 @@ min(weight, round(weight × n / base))`:
 | `GET /api/machines/{id}/categories` | `from,to` → `CategoryShare[]` (proc_cat_1h) |
 | `GET /api/machines/{id}/sessions` | `from,to` → `SessionItem[]` (usage_session) |
 | `GET /api/machines/{id}/events` | `kind,from,to` → `EventDTO[]` |
-| `GET /api/machines/{id}/alerts` | `status,from,to` → `AlertDTO[]` |
+| `GET /api/machines/{id}/alerts` | `status,from,to` → `AlertDTO[]` (newest first, ≤500) |
 | `GET /api/machines/{id}/remediation` | — → `MachineRemediation` (§10) |
-| `PUT /api/admin/machines/{id}/labels` | `{labels:{room,owner,dept}}` |
+| `PUT /api/admin/machines/{id}/labels` | `{labels?: {room,owner,dept,…}, tags?: [string]}` → `200 {labels, tags}` (stored values) |
+
+If `from`/`to` are not given, the series endpoints default to the last 6 hours. **Exception:**
+`/alerts` treats `from`/`to` as optional filters on `opened_at` with **no** default window, so a
+still-open alert raised days ago is listed.
+
+`labels` and `tags` are independent: an omitted key keeps its stored value, at least one must be
+sent. Tags are trimmed, de-duplicated, and limited to 64 characters each.
 
 If `res` is not given, the server picks the source based on the range: ≤6h → `raw`, ≤7d → `5m`,
 otherwise → `1h`.
@@ -350,13 +373,21 @@ otherwise → `1h`.
 
 | Endpoint | Response |
 |----|-------|
-| `GET /api/users` | `UserSummary[]` (distinct `logon_user`, last seen, current machine, online) |
+| `GET /api/users` | `tag=` (optional department filter) → `UserSummary[]` (distinct `logon_user`, `display_name`, `tags`, last seen, current machine, online; Linux hosts' local accounts excluded) |
+| `GET /api/users/{user}/activity` | `from,to` → `{heatmap:[{weekday 0=Mon…6, hour, active_minutes}], daily:[{date, active_minutes, loggedon_minutes}], total_active_minutes, total_loggedon_minutes}` (Europe/Istanbul) |
+| `GET /api/users/{user}/apps` | `from,to` → `[{name, seconds}]` foreground time per application base name, top 20 |
 | `GET /api/users/{user}/timeline` | `from,to` → `SessionItem[]` (across machines) |
 | `GET /api/users/{user}/logons` | `from,to` (default last 90d) → `UserLogon[]` `{machine_id, hostname, started_at, ended_at\|null, active_seconds}` — uninterrupted spans during which the user was a machine's console user, newest first. Derived from raw `metric_sample` as (machine, user) islands (5 min of silence = new record); archived machines are included |
 | `GET /api/users/{user}/network` | `from,to,res=1h` → `NetPoint[]` (net_user_1h) |
 | `GET /api/users/{user}/categories` | `from,to` → `CategoryShare[]` (proc_cat_user_1h) |
 
 `{user}` is URL-encoded (`CORP\ayse` → `CORP%5Cayse`).
+
+| Endpoint | Description |
+|----|----------|
+| `PUT /api/admin/users/{user}` | admin: `{display_name, tags}` — **both required** (full replace) → `200 {logon_user, display_name, tags}` |
+| `GET /api/admin/tags` | admin: `[{tag, user_count}]` — department tags in use |
+| `GET /api/tags/{tag}/summary` | `from,to` → `{tag, users:[{logon_user, display_name?, active_minutes, top_category?}], category_totals: CategoryShare[]}` |
 
 ---
 
@@ -410,8 +441,20 @@ small message table on the server (`server/internal/alerts/i18n.go`); both langu
 |----|----------|
 | `GET/POST /api/admin/categories`, `PUT/DELETE /api/admin/categories/{id}` | program-type classification rules (CRUD) |
 | `GET  /api/admin/unclassified` | `from,to` → frequently seen unclassified process names |
-| `POST /api/admin/reclassify` | `{window}` — reclassify the raw window + refresh rollups |
+| `POST /api/admin/reclassify` | `{window?}` — reclassify the raw window + refresh rollups |
 | `GET/PUT /api/admin/alert-rules` | read/update alert thresholds |
+
+- **Category rule** body (POST, and PUT with the id in the **path** — the full rule as GET returns
+  it): `{category, match_type, match_value, priority, enabled}` (`id` may be repeated in the PUT
+  body but must equal the path). `category` 1-64 characters, `match_value` 1-128 (lower-cased),
+  `match_type ∈ {exact, prefix, glob}` (empty → `exact`); otherwise `invalid_request` +
+  `params.field`. A duplicate `match_type`+`match_value` → `409 category_rule_conflict` (create and
+  update). Unknown id → `404`. DELETE → `204`.
+- **reclassify** `window`: `6h`, `24h`, `7d` … (default `24h`, at most `30d`); anything else →
+  `invalid_request` (`params.field="window"`). Response `{updated_rows, from, to}`.
+- **alert-rules** PUT body is a bare array `[{rule, enabled, warn_threshold|null,
+  crit_threshold|null, for_seconds}]`; the response is the full list as GET returns it. An unknown
+  `rule` rejects the whole save (`invalid_request`, `params.rule`) and nothing is written.
 | `GET/POST /api/admin/panel-users` … | panel user management (§7.1) |
 | `GET/POST /api/admin/users` | **legacy alias** for `panel-users` list/create (same handler). `PUT /api/admin/users/{user}`, however, is something else: the profile of a monitored **domain** user |
 | `GET/PUT /api/admin/settings/general` | general settings (§2.3) |
@@ -434,7 +477,7 @@ Accounts that can sign in to the panel (`admin_user`). `PanelUser`:
 |----|-------|-------|
 | `GET    /api/admin/panel-users` | — | `PanelUser[]` |
 | `POST   /api/admin/panel-users` | `{username, password, role, display_name?}` | `201 PanelUser` |
-| `PATCH  /api/admin/panel-users/{username}` | `{role?, disabled?, display_name?}` | `200 PanelUser` (updated state) |
+| `PATCH  /api/admin/panel-users/{username}` | `{role?, disabled?, display_name?}` (at least one) | `200 PanelUser` (updated state) |
 | `POST   /api/admin/panel-users/{username}/reset-password` | `{new_password}` | `204`; all of the target's sessions are dropped |
 | `POST   /api/admin/panel-users/{username}/reset-2fa` | — | `204`; 2FA + recovery codes are deleted |
 | `DELETE /api/admin/panel-users/{username}` | — | `204` |
@@ -477,6 +520,11 @@ The server sends coalesced snapshots on a **2-5 s tick** (not on every ingest):
 { "type": "alert.resolved", "payload": { "id": 123 } }
 ```
 
+Channels: `fleet` → `fleet.update`; `alerts` → `alert.opened` / `alert.resolved`;
+`machine:<id>` → `machine.metric` for that machine, sent on the same tick whenever its
+`machine_live` row changed (`t` = the row's timestamp, `mem_ratio` 0-1). A subscribe message
+replaces the client's whole subscription set.
+
 ---
 
 ## 9. Statistics (dashboard)
@@ -484,7 +532,8 @@ The server sends coalesced snapshots on a **2-5 s tick** (not on every ingest):
 ### `GET /api/stats/hourly-activity?days=7`  (alias: `GET /api/v1/stats/hourly-activity`)
 
 `days`: 1-30 (default 7; out-of-range values are clamped to the bound). Fleet-wide "busy hours"
-heatmap — from the `session_user_1h` cagg (including empty `logon_user`, machine-level activity).
+heatmap — from the `session_user_1h` cagg (including empty `logon_user`, machine-level activity;
+Linux hosts excluded).
 `dow` is ISO (1=Monday … 7=Sunday), `hour` 0-23, both in **Europe/Istanbul** local time.
 `active_seconds = active_samples × 15` (nominal vitals cadence is 15 s — see docs/DATABASE.md);
 `samples` = total vitals samples in the cell.
@@ -512,7 +561,8 @@ never a title/path/URL.
 
 `days`: 1-30 (default 7), `limit`: 1-200 (default 20), `min_score`: score threshold (default 0).
 The "slow machines" diagnostic report. It uses no new agent capability — it is derived from
-telemetry that is already collected.
+telemetry that is already collected. Linux hosts (`kind = 'linux'`, the server itself) are not
+ranked: the score is tuned for user PCs, and a server's long uptime is not a slowness signal.
 
 The score is **additive** (unlike the fleet health score, it is not subtracted from 100), clamped to
 100, and every contributing factor is returned in `reasons[]` with its points, so that the panel can
@@ -596,11 +646,12 @@ count per item and a version-drift summary.
     "kind": "app", "item_id": "weather", "family": "Microsoft.BingWeather_8wekyb3d8bbwe",
     "display_name": "Weather (MSN)", "category": "medya", "risk_tier": "safe",
     "scope": "both", "safe_default": true, "process_names": ["msnweather"],
-    "notes": "…", "deprecated": false, "selected": true, "present_count": 27
+    "notes": "…", "deprecated": false, "selected": true, "present_count": 27, "reported_count": 33
   } ],
   "startup": [ { "kind": "startup", "item_id": "startup.spotify", "family": "Spotify",
                  "display_name": "Spotify — at sign-in", "risk_tier": "safe",
-                 "safe_default": true, "deprecated": false, "selected": false, "present_count": 4 } ],
+                 "safe_default": true, "deprecated": false, "selected": false,
+                 "present_count": 4, "reported_count": 33 } ],
   "policy": { "enabled": false, "dry_run": true, "excluded_tags": ["server"],
               "apps": ["weather"], "startup": [], "revision": 7,
               "updated_at": "…", "updated_by": "admin" },
@@ -611,14 +662,19 @@ count per item and a version-drift summary.
 
 `deprecated:true` = an item removed from the vocabulary; it is **flagged, not filtered** (it may
 still be selected or still be present on a machine). `present_count` comes from
-`machine_remediation_state` (`present = true`). `catalog_stale` = number of machines whose
+`machine_remediation_state` (`present = true`, non-archived machines); it is **`null`** while no
+machine has sent a hygiene report at all (unknown — not "nowhere"). `reported_count` = machines that
+have sent a hygiene report (`fleet.reporting`): agents scan their whole compiled catalog and report
+only what is present, so every reporting machine is the denominator for every item. `catalog_stale` = number of machines whose
 `catalog_version` differs from the server's (the agent binary is old). `kill_switch_off` = machines
 whose local GPO switch forbids the action. `policy.revision` is a **number** (whereas
 `policy.revision` in the ingest response is a string).
 
 ### `PUT /api/admin/remediation/policy`
 
-The body is the full desired state (the selection is replaced wholesale):
+The body is the full desired state (the selection is replaced wholesale), so all five keys are
+**required** — a missing one is `400 invalid_request` with `params.field` (a missing `apps` would
+otherwise empty the selection, a missing `dry_run` would switch dry-run off). `force` is optional:
 
 ```jsonc
 { "enabled": true, "dry_run": true, "excluded_tags": ["server"],
@@ -780,7 +836,8 @@ the admin downloads from the panel and runs on **their own** domain PC, under **
 - `artifacts.agent_sha256` is the SHA-256 of the served `tolikopa-agent.exe` (computed on the server
   at startup / when the file changes). The setup tool prints the same value in its plan; the admin
   compares the two (optionally: `Get-FileHash` on the file copied to the share).
-- `fleet`: non-archived machines, by `machine.agent_version` (`version: ""` = did not report a
+- `fleet`: non-archived **Windows** machines (`kind <> 'linux'` — `tolikopa-update.exe` cannot
+  update the Linux agent, so it neither counts as outdated nor raises `update_available`), by `machine.agent_version` (`version: ""` = did not report a
   version). `current` = those on the same version as `artifacts.agent_version` (a leading `v` is
   ignored); `outdated` = the rest. If `artifacts` is absent, both are `0`.
   `update_available = artifacts != null && outdated > 0`.

@@ -56,6 +56,23 @@
 
 	header {
 		# Sensible security headers for an internal panel.
+		#
+		# CSP, derived from the real build (web/dist):
+		#  - script-src: only same-origin bundles, plus the ONE inline script in
+		#    web/index.html (theme/language before first paint), allowed by its hash.
+		#    Editing that script changes the hash: update it here. web/Dockerfile
+		#    recomputes the hash of every inline script in dist/index.html and fails
+		#    the image build when one is not listed in this file.
+		#  - style-src 'unsafe-inline': React/motion/Recharts set inline styles.
+		#  - fonts are self-hosted (@fontsource), images same-origin or data:.
+		#  - connect-src 'self' covers fetch and the same-origin wss:// /ws socket.
+		#  - blob downloads (<a download href=blob:...>) are navigations, not fetches.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-lAKQnuOmw6poJp3SRQoWaGRMCDS2HYOT245vMdmbQCw='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+		# One year. Browsers only honour it over a connection whose certificate they
+		# trust (the GPO-distributed one) and never for an IP address; it makes them
+		# refuse a later certificate warning for the panel's name instead of offering
+		# a click-through. No includeSubDomains: siblings of the panel name are not ours.
+		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"

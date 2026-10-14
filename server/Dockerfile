@@ -5,19 +5,32 @@
 # panel hands out during setup: the Windows and Linux agents and the domain rollout
 # tool. Rebuilding the image after a `git pull` is therefore also what produces a
 # new agent build; the panel then offers it as tolikopa-update.exe.
+#
+# Supply chain: this pipeline builds the binary that runs as SYSTEM on every PC.
+#  - Base images are pinned by tag AND digest (tag for humans, digest is what
+#    Docker actually pulls). To update: `docker buildx imagetools inspect <tag>`
+#    and replace both.
+#  - Go dependencies come only from the committed go.mod/go.sum: `go mod download`
+#    (verified against go.sum and the checksum database) + `-mod=readonly`. No
+#    `go mod tidy` here: it would resolve a new import to whatever is latest.
+#  - GOTOOLCHAIN=local: a go.mod asking for a newer Go fails the build instead of
+#    silently downloading a different toolchain.
+ARG GO_IMAGE=golang:1.26.9-trixie@sha256:f06b7122f888680048afb247c4e5f49c0069eb6c4c1ccae0f3f4834527a8d22c
+ARG RUNTIME_IMAGE=alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 # ── Agent + rollout tool ───────────────────────────────────────────────────────
-FROM golang:1.26 AS artifacts
-ENV CGO_ENABLED=0
+FROM ${GO_IMAGE} AS artifacts
+ENV CGO_ENABLED=0 GOFLAGS=-mod=readonly GOTOOLCHAIN=local
 WORKDIR /src
 
-# The committed go.mod files are intentionally minimal (no require block);
-# `go mod tidy` populates requires + go.sum from the source.
+COPY agent/go.mod agent/go.sum ./agent/
+RUN cd agent && go mod download && go mod verify
 COPY agent/ ./agent/
-RUN cd agent && go mod tidy \
+RUN cd agent \
  && GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o /out/tolikopa-agent.exe ./cmd/agent \
  && GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o /out/tolikopa-agent     ./cmd/agent
 
+# The rollout tool is stdlib-only (go.mod without requires, hence no go.sum).
 COPY VERSION ./VERSION
 COPY setup/ ./setup/
 RUN cd setup && GOOS=windows GOARCH=amd64 go build -trimpath \
@@ -31,18 +44,20 @@ RUN AGENT_VERSION="$(sed -n 's/^var version = "\(.*\)"$/\1/p' agent/cmd/agent/ma
       "$(cat VERSION)" "$AGENT_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /out/artifacts.json
 
 # ── Server ─────────────────────────────────────────────────────────────────────
-FROM golang:1.26 AS build
+FROM ${GO_IMAGE} AS build
+ENV CGO_ENABLED=0 GOFLAGS=-mod=readonly GOTOOLCHAIN=local
 WORKDIR /src
+COPY server/go.mod server/go.sum ./
+RUN go mod download && go mod verify
 # Migrations are embedded in the binary via embed.FS (no runtime copy needed).
 COPY VERSION /VERSION
 COPY server/ .
-RUN go mod tidy
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN go build -trimpath \
       -ldflags "-s -w -X github.com/aliyalinkilic/tolikopa/server/internal/buildinfo.Version=$(cat /VERSION)" \
       -o /out/server ./cmd/server
 
 # ── Runtime ────────────────────────────────────────────────────────────────────
-FROM alpine:3.20
+FROM ${RUNTIME_IMAGE}
 RUN apk add --no-cache ca-certificates tzdata wget
 COPY --from=build /out/server /server
 COPY --from=artifacts /out/ /opt/tolikopa/artifacts/

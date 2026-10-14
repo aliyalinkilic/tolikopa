@@ -45,7 +45,10 @@ PDC role:
   `tolikopa.corp.local`), an **A record** is added to that zone.
 - If no zone contains the name (e.g. `tolikopa.local`), an Active Directory-integrated primary
   zone is created **with exactly this name** (`ReplicationScope Domain`) and an A record is added
-  at the zone root.
+  at the zone root. A new zone makes the domain's DNS answer for that whole name space, so it is
+  **only created interactively**: the tool asks you to type the zone name before the general
+  confirmation. With `-yes` or `-dry-run` a name that needs a new zone is refused — run
+  interactively, use `-dns-name` for a name inside an existing zone, or use `-skip-dns`.
 - If the name already points to another address (or has a CNAME/AAAA record), it is **not
   overwritten**: the tool shows the existing addresses and stops. Choose another name, delete the
   old record, or use `-skip-dns`.
@@ -62,8 +65,10 @@ If the certificate can be distributed safely, the tool adds it to the same GPO:
 `HKLM\Software\Policies\Microsoft\SystemCertificates\Root\Certificates\<SHA1>\Blob`
 (Registry CSE). Computers the GPO applies to open the panel without a warning. Conditions: the
 certificate is self-signed, **not a CA** (no CA flag / certificate-signing right), has
-`serverAuth` usage, contains a DNS name and has not expired — this is the certificate `setup.sh`
-generates. If any condition fails, the tool prints the reason and does not distribute the
+`serverAuth` usage, names **exactly one DNS host** (no wildcard) and at most one IP address,
+belongs to the bundle's server (its DNS name is the host of the server URL, or — when the server
+URL is an IP address — its IP address is that address) and has not expired — this is the
+certificate `setup.sh` generates. If any condition fails, the tool prints the reason and does not distribute the
 certificate (rationale: [SECURITY.md](SECURITY.md)).
 
 When the certificate changes, running again removes the old fingerprints from that GPO. Removing

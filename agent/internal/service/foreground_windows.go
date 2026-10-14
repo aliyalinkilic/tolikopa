@@ -3,13 +3,10 @@
 package service
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"time"
 	"unsafe"
 
@@ -17,6 +14,7 @@ import (
 
 	"github.com/aliyalinkilic/tolikopa/agent/internal/collector"
 	"github.com/aliyalinkilic/tolikopa/agent/internal/sender"
+	"github.com/aliyalinkilic/tolikopa/agent/internal/winproc"
 )
 
 // noSession marks "no interactive console session".
@@ -133,19 +131,24 @@ func launchHelper(ctx context.Context, exePath string, session uint32, snd *send
 	// The parent's read end must not be inherited by the child.
 	_ = windows.SetHandleInformation(readEnd, windows.HANDLE_FLAG_INHERIT, 0)
 
-	si := &windows.StartupInfo{}
-	si.Cb = uint32(unsafe.Sizeof(*si))
-	si.Flags = windows.STARTF_USESTDHANDLES
-	si.StdOutput = writeEnd
-	si.StdErr = writeEnd
-	si.Desktop = windows.StringToUTF16Ptr(`winsta0\default`) // interactive desktop
+	// The explicit handle list means the user-context helper inherits ONLY its
+	// own pipe write end — never a pipe end of the SYSTEM removal worker that
+	// may be open on another goroutine at this instant.
+	si, err := winproc.NewStartupInfo(0, writeEnd, writeEnd)
+	if err != nil {
+		_ = windows.CloseHandle(writeEnd)
+		_ = windows.CloseHandle(readEnd)
+		return nil, err
+	}
+	si.Ex.Desktop = windows.StringToUTF16Ptr(`winsta0\default`) // interactive desktop
 
 	appName := windows.StringToUTF16Ptr(exePath)
 	cmdline := windows.StringToUTF16Ptr(`"` + exePath + `" --fg-helper`)
 
 	var pi windows.ProcessInformation
-	err := windows.CreateProcessAsUser(token, appName, cmdline, nil, nil, true,
-		windows.CREATE_NO_WINDOW, nil, nil, si, &pi)
+	err = windows.CreateProcessAsUser(token, appName, cmdline, nil, nil, true,
+		windows.CREATE_NO_WINDOW|winproc.Flags, nil, nil, si.Base(), &pi)
+	si.Close()
 	_ = windows.CloseHandle(writeEnd) // child owns the write end now
 	if err != nil {
 		_ = windows.CloseHandle(readEnd)
@@ -157,32 +160,13 @@ func launchHelper(ctx context.Context, exePath string, session uint32, snd *send
 	hctx, cancel := context.WithCancel(ctx)
 	hp.cancel = cancel
 
-	// Reader: consume per-app tallies until the child exits (EOF). Keys with the
-	// "__" prefix are reserved control fields (never app names): "__idle" carries
-	// seconds since last input and feeds the shared session tracker; unknown
-	// control keys are dropped.
+	// Reader: consume per-app tallies until the child exits (EOF).
 	go func() {
 		defer func() { _ = recover() }() // never let a reader panic crash the agent
 		defer close(hp.done)
 		f := os.NewFile(uintptr(readEnd), "tolikopa-fg")
 		defer f.Close() // closes readEnd
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 8192), 1<<20)
-		for sc.Scan() {
-			var m map[string]int
-			if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
-				continue
-			}
-			for name, sec := range m {
-				if strings.HasPrefix(name, "__") {
-					if name == "__idle" {
-						tracker.ReportIdle(sec)
-					}
-					continue
-				}
-				snd.AddAppFocus(name, sec)
-			}
-		}
+		readHelperLines(f, snd, tracker)
 	}()
 
 	// Terminator: kill and reap the child when its context is cancelled.

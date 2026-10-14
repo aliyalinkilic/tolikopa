@@ -48,7 +48,11 @@ func (a *API) FleetOverview(c echo.Context) error {
 	)
 	rows, err := a.pool.Query(ctx, `
 		SELECT m.machine_id, m.hostname, ml.ts, ml.cpu_pct, ml.mem_used, ml.mem_total,
-		       ml.disk_min_free_pct, ml.logon_user, ml.session_state, m.reboot_pending
+		       ml.disk_min_free_pct, ml.logon_user,
+		       -- A Linux host is a headless server: its "active" only means a
+		       -- logind/SSH session exists, so it never counts as a PC in use.
+		       CASE WHEN m.kind = 'linux' THEN NULL ELSE ml.session_state END,
+		       m.reboot_pending
 		FROM machine m JOIN machine_live ml ON ml.machine_id = m.machine_id
 		WHERE m.archived_at IS NULL`)
 	if err != nil {
@@ -291,6 +295,8 @@ func (a *API) StatsHourlyActivity(c echo.Context) error {
 		       sum(total_samples)::bigint
 		FROM session_user_1h
 		WHERE bucket >= now() - make_interval(days => $1)
+		  -- PC usage only: a Linux server's logind/SSH session is not a person at a desk.
+		  AND machine_id NOT IN (SELECT machine_id FROM machine WHERE kind = 'linux')
 		GROUP BY 1, 2 ORDER BY 1, 2`, days)
 	if err != nil {
 		return serverError(err)

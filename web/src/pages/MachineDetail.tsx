@@ -74,6 +74,10 @@ export function MachineDetail() {
   const memPct = (machine.mem_ratio ?? 0) * 100
   const diskUsed = 100 - (machine.disk_min_free_pct ?? 100)
   const tags = machine.tags ?? []
+  const isLinux = machine.kind === 'linux'
+  // The remote tab is Windows-only (WinRM/PowerShell, GPO, RDP); a Linux host has
+  // nothing it could offer.
+  const showRemote = isAdmin && !isLinux
 
   const tabs = [
     { key: 'metrics', label: t('machine.tabMetrics'), icon: <Cpu className="size-4" aria-hidden /> },
@@ -82,7 +86,7 @@ export function MachineDetail() {
     { key: 'sessions', label: t('machine.tabSessions'), icon: <Clock className="size-4" aria-hidden /> },
     { key: 'alerts', label: t('machine.tabAlerts'), icon: <BellRing className="size-4" aria-hidden /> },
     // Remote-management commands are an admin-only convenience surface.
-    ...(isAdmin
+    ...(showRemote
       ? [{ key: 'remote', label: t('machine.tabRemote'), icon: <Terminal className="size-4" aria-hidden /> }]
       : []),
   ]
@@ -171,7 +175,7 @@ export function MachineDetail() {
       {/* Windows Update and battery are collected by the Windows agent only; on
           Linux both collectors are no-ops, so the cards could only ever say
           "not reported yet". */}
-      {machine.kind !== 'linux' && (
+      {!isLinux && (
         <div className="mb-6 grid gap-4 lg:grid-cols-2">
           <UpdatesCard machine={machine} />
           <BatteryCard machine={machine} />
@@ -196,8 +200,8 @@ export function MachineDetail() {
       {tab === 'apps' && id && <AppsTab id={id} win={win} />}
       {tab === 'categories' && id && <CategoriesTab id={id} win={win} />}
       {tab === 'sessions' && id && <SessionsTab id={id} win={win} />}
-      {tab === 'alerts' && id && <AlertsTab id={id} win={win} />}
-      {tab === 'remote' && isAdmin && <RemoteTab hostname={machine.hostname} />}
+      {tab === 'alerts' && id && <AlertsTab id={id} win={win} showEvents={!isLinux} />}
+      {tab === 'remote' && showRemote && <RemoteTab hostname={machine.hostname} />}
 
       {isAdmin && id && (
         <MachineTagEditor
@@ -207,7 +211,6 @@ export function MachineDetail() {
           machineId={id}
           hostname={machine.hostname}
           initialTags={tags}
-          labels={machine.labels}
         />
       )}
     </div>
@@ -221,14 +224,12 @@ function MachineTagEditor({
   machineId,
   hostname,
   initialTags,
-  labels,
 }: {
   open: boolean
   onClose: () => void
   machineId: string
   hostname: string
   initialTags: string[]
-  labels?: Record<string, unknown>
 }) {
   const t = useT()
   const update = useUpdateMachineTags()
@@ -249,7 +250,7 @@ function MachineTagEditor({
 
   const save = () => {
     update.mutate(
-      { id: machineId, labels: labels ?? {}, tags },
+      { id: machineId, tags },
       {
         onSuccess: () => {
           push({ title: t('machine.tagsSaved'), tone: 'ok' })
@@ -754,14 +755,16 @@ function SessionsTab({ id, win }: { id: string; win: { from: string; to: string 
 }
 
 // ── Alerts tab ──────────────────────────────────────────────────────────────────
-function AlertsTab({ id, win }: { id: string; win: { from: string; to: string } }) {
+// showEvents is false for Linux: crashes and hardware warnings come from the
+// Windows event log, so on Linux the card could only ever be empty.
+function AlertsTab({ id, win, showEvents }: { id: string; win: { from: string; to: string }; showEvents: boolean }) {
   const t = useT()
   const { data: alerts, isLoading } = useMachineAlerts(id)
-  const { data: events } = useMachineEvents(id, win)
+  const { data: events } = useMachineEvents(showEvents ? id : undefined, win)
   const ack = useAckAlert()
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+    <div className={showEvents ? 'grid gap-4 lg:grid-cols-[1.4fr_1fr]' : 'grid gap-4'}>
       <Card>
         <CardHeader title={t('nav.alerts')} description={t('machine.alertsBody')} />
         <div className="mt-4">
@@ -777,12 +780,14 @@ function AlertsTab({ id, win }: { id: string; win: { from: string; to: string } 
           )}
         </div>
       </Card>
-      <Card>
-        <CardHeader title={t('machine.eventsTitle')} description={t('machine.eventsBody')} />
-        <div className="mt-4">
-          <EventList events={events ?? []} />
-        </div>
-      </Card>
+      {showEvents && (
+        <Card>
+          <CardHeader title={t('machine.eventsTitle')} description={t('machine.eventsBody')} />
+          <div className="mt-4">
+            <EventList events={events ?? []} />
+          </div>
+        </Card>
+      )}
     </div>
   )
 }

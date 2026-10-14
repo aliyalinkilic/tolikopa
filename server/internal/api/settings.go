@@ -110,8 +110,11 @@ func (a *API) PutGeneralSettings(c echo.Context) error {
 		DefaultLang *string `json:"default_lang"`
 		Require2FA  *bool   `json:"require_2fa"`
 	}
-	if err := c.Bind(&body); err != nil {
-		return apierr.BadRequest("invalid request body")
+	if err := apierr.Bind(c, &body); err != nil {
+		return err
+	}
+	if body.OrgName == nil && body.DefaultLang == nil && body.Require2FA == nil {
+		return apierr.BadRequest("no settings field in request body")
 	}
 	cur, err := a.loadGeneral(ctx)
 	if err != nil {

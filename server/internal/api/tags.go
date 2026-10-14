@@ -4,6 +4,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -25,12 +26,39 @@ func tagParam(c echo.Context) string {
 func (a *API) AdminSetUserProfile(c echo.Context) error {
 	ctx := c.Request().Context()
 	user := userParam(c)
-	var body model.UserProfileUpdate
-	if err := c.Bind(&body); err != nil {
-		return apierr.BadRequest("invalid request body")
+	// Full replace: both keys are required. A loose bind let an empty or
+	// mis-shaped body wipe the display name and every department tag with 200.
+	var raw struct {
+		DisplayName *string   `json:"display_name"`
+		Tags        *[]string `json:"tags"`
 	}
-	if body.Tags == nil {
-		body.Tags = []string{}
+	if err := apierr.Bind(c, &raw); err != nil {
+		return err
+	}
+	if raw.DisplayName == nil {
+		return apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
+			"display_name is required", map[string]any{"field": "display_name"})
+	}
+	if raw.Tags == nil {
+		return apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
+			"tags is required", map[string]any{"field": "tags"})
+	}
+	body := model.UserProfileUpdate{DisplayName: strings.TrimSpace(*raw.DisplayName), Tags: []string{}}
+	seen := map[string]struct{}{}
+	for _, t := range *raw.Tags {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if len(t) > maxTagLen {
+			return apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
+				"tag is too long", map[string]any{"field": "tags", "max_length": maxTagLen})
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		body.Tags = append(body.Tags, t)
 	}
 
 	var resp struct {

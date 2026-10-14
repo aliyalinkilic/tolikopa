@@ -200,6 +200,10 @@ func run(o options) int {
 		block(t("err_dns_conflict", dns.Name, strings.Join(limit(pre.DNSExisting, 5), ", ")))
 	case dns != nil && pre.DNSState == "unknown":
 		block(t("err_dns_unknown", pre.DNSError))
+	case dns != nil && pre.DNSState == "new_zone" && (o.yes || o.dryRun):
+		// A new zone makes the domain's DNS answer for a whole name space on every
+		// PC. That is never done on defaults: only an admin who typed the zone name.
+		block(t("err_dns_new_zone_unattended", dns.Name))
 	}
 
 	// The plan is printed even when a check failed, so a dry run on any machine
@@ -269,6 +273,18 @@ func run(o options) int {
 		fmt.Println()
 	}
 
+	// A new zone is confirmed on its own, by name, before the general YES.
+	allowNewZone := false
+	if dns != nil && pre.DNSState == "new_zone" {
+		fmt.Println(t("dns_zone_confirm_intro", dns.Name, dns.Name))
+		if !strings.EqualFold(prompt(t("dns_zone_confirm_prompt"), ""), dns.Name) {
+			fmt.Println(t("dns_zone_not_confirmed"))
+			return 0
+		}
+		allowNewZone = true
+		fmt.Println()
+	}
+
 	if !o.yes {
 		fmt.Print(t("confirm"))
 		answer, _ := stdin.ReadString('\n')
@@ -321,7 +337,7 @@ func run(o options) int {
 	// DNS before the GPO: the agents the GPO installs look the panel up by name.
 	if dns != nil {
 		fmt.Println(t("step_dns"))
-		res, err := domain.ApplyDNS(m, *dns)
+		res, err := domain.ApplyDNS(m, *dns, allowNewZone)
 		if code := report(m, res, err); code != 0 {
 			return code
 		}
@@ -508,6 +524,8 @@ func report(m *payload.Manifest, res *domain.Result, err error) int {
 		fmt.Fprintln(os.Stderr, t("err_gp_module"))
 	case "dns_module_missing":
 		fmt.Fprintln(os.Stderr, t("err_dns_module"))
+	case "dns_new_zone_not_confirmed":
+		fmt.Fprintln(os.Stderr, t("err_dns_new_zone_refused"))
 	case "dns_conflict":
 		existing := ""
 		if res != nil {

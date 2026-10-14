@@ -2,8 +2,11 @@ module github.com/aliyalinkilic/tolikopa/agent
 
 go 1.26
 
-// Direct dependencies are populated/pinned by `go mod tidy` at build time
-// (the Dockerfile / build.ps1 run it). Primary deps:
+// The require blocks and go.sum are committed and complete: the image build runs
+// `go mod download` + `go build -mod=readonly`, never `go mod tidy`, so the binary
+// that runs as SYSTEM on every PC is built from exactly these versions. After
+// adding or removing an import, run `go mod tidy` locally and commit both files.
+// Primary deps:
 //   github.com/shirou/gopsutil/v4   — CPU/RAM/disk/net/process metrics
 //   golang.org/x/sys/windows        — svc, mgr, WTS session APIs, wevtapi
 //   github.com/yusufpapurcu/wmi     — WMI (SMART health)

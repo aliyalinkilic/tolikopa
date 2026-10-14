@@ -27,7 +27,7 @@ import (
 )
 
 // version is overridable at build time: -ldflags "-X main.version=1.2.3".
-var version = "2.0.0"
+var version = "2.0.1"
 
 func main() {
 	cmd := ""

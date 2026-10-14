@@ -74,8 +74,10 @@ func (a *API) GetRemediation(c echo.Context) error {
 		LEFT JOIN remediation_policy_item pi
 		       ON pi.kind = ri.kind AND pi.item_id = ri.item_id
 		LEFT JOIN (
-			SELECT kind, item_id, count(*)::int AS n
-			FROM machine_remediation_state WHERE present GROUP BY 1, 2
+			SELECT s.kind, s.item_id, count(*)::int AS n
+			FROM machine_remediation_state s
+			JOIN machine m ON m.machine_id = s.machine_id AND m.archived_at IS NULL
+			WHERE s.present GROUP BY 1, 2
 		) pc ON pc.kind = ri.kind AND pc.item_id = ri.item_id
 		ORDER BY ri.sort_order, ri.kind, ri.item_id`)
 	if err != nil {
@@ -86,13 +88,15 @@ func (a *API) GetRemediation(c echo.Context) error {
 		var (
 			it                           model.RemediationCatalogItem
 			category, risk, scope, notes *string
+			present                      int
 		)
 		if err := rows.Scan(&it.Kind, &it.ItemID, &it.Family, &it.DisplayName, &category, &risk,
 			&scope, &it.SafeDefault, &it.ProcessNames, &notes, &it.Deprecated,
-			&it.Selected, &it.PresentCount); err != nil {
+			&it.Selected, &present); err != nil {
 			return serverError(err)
 		}
 		it.Category, it.RiskTier, it.Scope, it.Notes = sv(category), sv(risk), sv(scope), sv(notes)
+		it.PresentCount = &present // nulled below if nobody has reported yet
 		if it.Kind == appcatalog.KindStartup {
 			out.Startup = append(out.Startup, it)
 		} else {
@@ -111,7 +115,9 @@ func (a *API) GetRemediation(c echo.Context) error {
 
 	// Fleet drift. policy_current strips the "-x" suffix Policies.Resolve adds for
 	// tag-excluded machines: those have applied the current revision too, they just
-	// applied its "does not apply to you" form.
+	// applied its "does not apply to you" form. Linux hosts are not counted: their
+	// agent has no hygiene backend and its kill switches are always off, so they
+	// would only ever show up as "kill switch off".
 	if err := a.pool.QueryRow(ctx, `
 		SELECT count(*)::int,
 		       count(*) FILTER (WHERE remediation_reported_at IS NOT NULL)::int,
@@ -121,12 +127,14 @@ func (a *API) GetRemediation(c echo.Context) error {
 		                          AND split_part(COALESCE(remediation_policy_revision, ''), '-', 1) = $2)::int,
 		       count(*) FILTER (WHERE remediation_reported_at IS NOT NULL
 		                          AND remediation_allowed IS NOT TRUE)::int
-		FROM machine WHERE archived_at IS NULL`, appcatalog.Version(), itoa64(pol.Revision)).
+		FROM machine WHERE archived_at IS NULL AND kind <> 'linux'`, appcatalog.Version(), itoa64(pol.Revision)).
 		Scan(&out.Fleet.Machines, &out.Fleet.Reporting, &out.Fleet.CatalogStale,
 			&out.Fleet.PolicyCurrent, &out.Fleet.KillSwitchOff); err != nil {
 		return serverError(err)
 	}
 	out.Fleet.NeverReported = out.Fleet.Machines - out.Fleet.Reporting
+	setPresenceDenominator(out.Apps, out.Fleet.Reporting)
+	setPresenceDenominator(out.Startup, out.Fleet.Reporting)
 
 	return c.JSON(http.StatusOK, out)
 }
@@ -140,9 +148,9 @@ func (a *API) GetRemediation(c echo.Context) error {
 func (a *API) PutRemediationPolicy(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	var body model.RemediationPolicyUpdate
-	if err := c.Bind(&body); err != nil {
-		return apierr.BadRequest("invalid request body")
+	body, err := bindPolicyUpdate(c)
+	if err != nil {
+		return err
 	}
 
 	apps, err := cleanItemIDs(body.Apps, appcatalog.KindApp)
@@ -469,6 +477,51 @@ func loadPolicy(ctx context.Context, q querier) (model.RemediationPolicyDTO, err
 type querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// setPresenceDenominator fills reported_count and turns present_count into null
+// ("unknown") while no machine has reported: a 0 would read as "nowhere".
+func setPresenceDenominator(items []model.RemediationCatalogItem, reporting int) {
+	for i := range items {
+		items[i].ReportedCount = reporting
+		if reporting == 0 {
+			items[i].PresentCount = nil
+		}
+	}
+}
+
+// bindPolicyUpdate decodes PUT /api/admin/remediation/policy. The body is the
+// COMPLETE desired state, so every key except `force` is required: with a loose
+// bind, a body missing `apps` wiped the selection and one missing `dry_run`
+// switched dry-run off — both answered 200.
+func bindPolicyUpdate(c echo.Context) (model.RemediationPolicyUpdate, error) {
+	var raw struct {
+		Enabled      *bool     `json:"enabled"`
+		DryRun       *bool     `json:"dry_run"`
+		ExcludedTags *[]string `json:"excluded_tags"`
+		Apps         *[]string `json:"apps"`
+		Startup      *[]string `json:"startup"`
+		Force        bool      `json:"force"`
+	}
+	if err := apierr.Bind(c, &raw); err != nil {
+		return model.RemediationPolicyUpdate{}, err
+	}
+	for _, f := range []struct {
+		name    string
+		missing bool
+	}{
+		{"enabled", raw.Enabled == nil}, {"dry_run", raw.DryRun == nil},
+		{"excluded_tags", raw.ExcludedTags == nil}, {"apps", raw.Apps == nil}, {"startup", raw.Startup == nil},
+	} {
+		if f.missing {
+			return model.RemediationPolicyUpdate{}, apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
+				f.name+" is required (the body is the complete policy)", map[string]any{"field": f.name})
+		}
+	}
+	return model.RemediationPolicyUpdate{
+		Enabled: *raw.Enabled, DryRun: *raw.DryRun, ExcludedTags: *raw.ExcludedTags,
+		Apps: *raw.Apps, Startup: *raw.Startup, Force: raw.Force,
+	}, nil
 }
 
 // cleanItemIDs validates a selection against the CLOSED vocabulary and returns it
