@@ -168,10 +168,15 @@ export function MachineDetail() {
         <DiskStrip machine={machine} />
       </Card>
 
-      <div className="mb-6 grid gap-4 lg:grid-cols-2">
-        <UpdatesCard machine={machine} />
-        <BatteryCard machine={machine} />
-      </div>
+      {/* Windows Update and battery are collected by the Windows agent only; on
+          Linux both collectors are no-ops, so the cards could only ever say
+          "not reported yet". */}
+      {machine.kind !== 'linux' && (
+        <div className="mb-6 grid gap-4 lg:grid-cols-2">
+          <UpdatesCard machine={machine} />
+          <BatteryCard machine={machine} />
+        </div>
+      )}
 
       {/* Tabs toolbar */}
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
