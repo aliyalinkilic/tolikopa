@@ -320,7 +320,7 @@ export function useCreateCategory() {
 export function useUpdateCategory() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (rule: CategoryRule) => api.put<CategoryRule>('/api/admin/categories', rule),
+    mutationFn: (rule: CategoryRule) => api.put<CategoryRule>(`/api/admin/categories/${rule.id}`, rule),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'categories'] }),
   })
 }
@@ -328,7 +328,7 @@ export function useUpdateCategory() {
 export function useDeleteCategory() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => api.del<void>('/api/admin/categories', { id }),
+    mutationFn: (id: number) => api.del<void>(`/api/admin/categories/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'categories'] }),
   })
 }
@@ -454,7 +454,7 @@ export function useSetupState(options: { enabled?: boolean; poll?: number | fals
 export function useSaveSetupConfig() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (config: Partial<SetupConfig>) => api.put<SetupConfig>('/api/admin/setup/config', { config }),
+    mutationFn: (config: Partial<SetupConfig>) => api.put<SetupConfig>('/api/admin/setup/config', config),
     onSuccess: () => qc.invalidateQueries({ queryKey: SETUP_KEY }),
   })
 }

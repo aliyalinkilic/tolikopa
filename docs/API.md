@@ -408,7 +408,7 @@ small message table on the server (`server/internal/alerts/i18n.go`); both langu
 
 | Endpoint | Description |
 |----|----------|
-| `GET/POST/PUT/DELETE /api/admin/categories` | program-type classification rules (CRUD) |
+| `GET/POST /api/admin/categories`, `PUT/DELETE /api/admin/categories/{id}` | program-type classification rules (CRUD) |
 | `GET  /api/admin/unclassified` | `from,to` → frequently seen unclassified process names |
 | `POST /api/admin/reclassify` | `{window}` — reclassify the raw window + refresh rollups |
 | `GET/PUT /api/admin/alert-rules` | read/update alert thresholds |
@@ -743,7 +743,7 @@ the admin downloads from the panel and runs on **their own** domain PC, under **
 | Endpoint | Body | Response |
 |----|-------|-------|
 | `GET  /api/admin/setup` | — | `SetupOverview` (below) |
-| `PUT  /api/admin/setup/config` | `config` object (may be partial) | `200` current `config` |
+| `PUT  /api/admin/setup/config` | the `config` fields themselves, not wrapped (may be partial; at least one field) | `200` current `config` |
 | `POST /api/admin/setup/complete` | — | `200 {completed_at: "…"}` |
 | `POST /api/admin/setup/reopen` | — | `200 {completed_at: null}` |
 | `GET  /api/admin/setup/download/{name}` | `?lang=tr\|en` (only for the two tools) | file |

@@ -153,9 +153,7 @@ func (a *API) Router() *echo.Echo {
 	adm.PUT("/settings/general", a.PutGeneralSettings)
 	adm.GET("/tags", a.AdminTags)
 	adm.GET("/ingest-token", a.IngestTokenInfo)
-	// Endpoint hygiene. Flat paths on purpose: the /admin/categories routes and the
-	// frontend's calls to them already disagree (PUT/DELETE /admin/categories vs
-	// /admin/categories/:id), so nothing here copies that shape.
+	// Endpoint hygiene.
 	adm.GET("/remediation", a.GetRemediation)
 	adm.PUT("/remediation/policy", a.PutRemediationPolicy)
 	adm.GET("/remediation/attempts", a.GetRemediationAttempts)

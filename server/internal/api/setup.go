@@ -303,6 +303,12 @@ func (a *API) PutSetupConfig(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return apierr.BadRequest("invalid request body")
 	}
+	// A body naming none of the fields (e.g. wrapped in another object) would
+	// otherwise "succeed" while changing nothing.
+	if body.ServerURL == nil && body.DomainFQDN == nil && body.NetBIOS == nil &&
+		body.TargetDN == nil && body.GPOName == nil && body.DefenderExclusion == nil {
+		return apierr.BadRequest("no config field in request body")
+	}
 	cfg, _, err := a.loadSetup(ctx)
 	if err != nil {
 		return serverError(err)
