@@ -1,0 +1,353 @@
+// Turkish — endpoint hygiene (app removal): enum labels, settings tab, panels.
+
+export const removal = {
+  mode: {
+    off: { label: 'Kapalı', description: 'Ajanlar hiçbir şey değerlendirmez ve hiçbir şeye dokunmaz.' },
+    dry_run: { label: 'Deneme', description: 'Ajanlar ne yapacaklarını raporlar, hiçbir uygulamayı kaldırmaz.' },
+    enforce: {
+      label: 'Uygulama',
+      description: 'Seçili uygulamalar kaldırılır, seçili başlangıç öğeleri devre dışı bırakılır.',
+    },
+  },
+  risk: {
+    safe: { label: 'Güvenli', description: 'Kurumsal bir kullanımı yok; kaldırılması beklenen bir etki yaratmaz.' },
+    review: { label: 'Değerlendirin', description: 'Kaldırılabilir, ama kullanan personel olabilir. Kararı siz verin.' },
+    advanced: { label: 'İleri Düzey', description: 'Windows davranışını bozabilir. Önce tek bir makinede deneyin.' },
+  },
+  kind: { app: 'Uygulama', startup: 'Başlangıç Öğesi' },
+  kindPlural: { app: 'Uygulamalar', startup: 'Başlangıç Öğeleri' },
+  category: {
+    oyun: 'Oyun',
+    medya: 'Medya',
+    uretkenlik: 'Üretkenlik',
+    iletisim: 'İletişim',
+    sistem: 'Sistem',
+    oem: 'Üretici Yüklemesi (OEM)',
+    other: 'Diğer',
+  },
+  scope: {
+    user: 'Mevcut kullanıcı profilleri',
+    provisioned: 'Yeni profiller (imaj)',
+    both: 'Mevcut ve yeni profiller',
+  },
+  action: {
+    remove: 'Kaldır',
+    deprovision: 'İmajdan Çıkar',
+    disable: 'Devre Dışı Bırak',
+    enable: 'Etkinleştir',
+  },
+  outcome: {
+    ok: { label: 'Başarılı', description: 'İşlem makinede uygulandı.' },
+    dry_run: { label: 'Deneme', description: 'Deneme modu — ajan yapacağını bildirdi, dokunmadı.' },
+    not_present: { label: 'Zaten Yok', description: 'Öğe bu makinede bulunamadı; yapılacak bir şey yoktu.' },
+    not_allowed: { label: 'GPO İzni Yok', description: 'Makinedeki yerel kill switch bu türü kapatmış.' },
+    blocked: {
+      label: 'Windows Engelledi',
+      description: 'Windows kaldırmayı reddetti — korumalı paket ya da makinede dağıtım sorunu.',
+    },
+    failed: { label: 'Başarısız', description: 'İşlem hata koduyla döndü.' },
+    timeout: { label: 'Zaman Aşımı', description: 'İşlem süre sınırında tamamlanamadı.' },
+    unknown_item: { label: 'Tanınmayan Öğe', description: 'Ajanın kataloğunda bu öğe yok — ajan sürümü eski.' },
+  },
+  error: {
+    '0X80073D02': {
+      label: 'Uygulama Açıktı',
+      hint: 'Kaldırma sırasında uygulama ya da bir bileşeni çalışıyordu. Genellikle kullanıcı oturumu kapatınca veya bilgisayar yeniden başlatılınca sonraki geçişte kendiliğinden çözülür.',
+    },
+    '0X80073D19': {
+      label: 'Oturum Kapandı',
+      hint: 'İşlem sürerken paketin kayıtlı olduğu kullanıcının oturumu kapandı. Sonraki geçişte yeniden denenir.',
+    },
+    '0X80073CFA': {
+      label: 'Windows Kaldırmayı Reddetti',
+      hint: 'Genel “kaldırma başarısız” kodu. Yalnızca bir uygulamada görülüyorsa o paket bu Windows sürümünde korumalıdır; seçimden çıkarın. Aynı makinede tüm uygulamalarda görülüyorsa sorun makinededir: AppXDeploymentServer olay günlüğüne bakın veya makineyi etiketle hariç tutun.',
+    },
+    '0X80070005': {
+      label: 'Erişim Reddedildi',
+      hint: 'Ajan SYSTEM olarak çalıştığı halde reddedildi — çoğunlukla Microsoft Store o anda aynı paketi güncelliyordur. Sürerse makinede Store güncellemelerini kontrol edin.',
+    },
+    '0X80073CF1': {
+      label: 'Paket Bulunamadı',
+      hint: 'Kaldırılmak istenen sürüm artık kayıtlı değil (arada güncellenmiş olabilir). Sonraki geçişte güncel sürüm yeniden çözülür.',
+    },
+    '0X80073CF6': {
+      label: 'Kayıt İşlemi Başarısız',
+      hint: 'Windows paket kaydını güncelleyemedi. Sürerse makinede AppXDeploymentServer olay günlüğüne bakın.',
+    },
+    '0X80073CF9': {
+      label: 'Dağıtım İşlemi Başarısız',
+      hint: 'Windows dağıtım motoru işlemi tamamlayamadı. Yeniden başlatma sonrası sürerse makineyi elle inceleyin.',
+    },
+    '0X80073CFE': {
+      label: 'Paket Deposu Bozuk',
+      hint: 'Makinenin Appx paket deposu bozulmuş görünüyor; bu kaldırmayla ilgili değil, makinenin onarılması gerekir.',
+    },
+    '0X800704C7': {
+      label: 'İptal Edildi',
+      hint: 'İşlem Windows tarafından iptal edildi (kapanma veya yeniden başlatma). Sonraki geçişte yeniden denenir.',
+    },
+    '0X80004002': {
+      label: 'Windows Sürümü Desteklemiyor',
+      hint: 'Bu makinedeki Windows, gereken dağıtım arayüzünü sunmuyor (1809 öncesi). Makineyi etiketle hariç tutun.',
+    },
+    '0X80040154': {
+      label: 'Dağıtım Bileşeni Yok',
+      hint: 'PackageManager bileşeni kayıtlı değil — genellikle Server Core veya kırpılmış bir Windows kurulumu.',
+    },
+    '0X80070002': {
+      label: 'Kayıt Değeri Yok',
+      hint: 'Başlangıç girdisi arada silinmiş. Sonraki envanterde “zaten yok” olarak kapanır.',
+    },
+    '0XE0000001': {
+      label: 'Ajan: WinRT Tablosu Eksik',
+      hint: 'Bu ajan sürümünde kaldırma altyapısı doğrulanmamış. Ajanı güncel sürüme yükseltin.',
+    },
+    '0XE0000002': {
+      label: 'Ajan: İzin Listesi Reddetti',
+      hint: 'Kaldırma işçisi paketi kendi izin listesinde bulamadı — ajan ve katalog uyuşmuyor. Ajanı güncelleyin.',
+    },
+    '0XE0000003': {
+      label: 'Ajan: Onay Anahtarı Yok',
+      hint: 'Başlangıç girdisinin StartupApproved karşılığı yok, bu yüzden devre dışı bırakılamıyor (RunOnce girdileri).',
+    },
+    '0XE0000004': {
+      label: 'Ajan: Kaldırma İşçisi Başlatılamadı',
+      hint: 'Ajan ayrı kaldırma sürecini başlatamadı veya onunla konuşamadı. Sürerse ajan hizmetini yeniden başlatın.',
+    },
+    '0XE0000005': {
+      label: 'Ajan: Paket Listesi Okunamadı',
+      hint: 'Ajan, Windows’a hangi paketlerin kurulu olduğunu soramadı; kör işlem yapmamak için durdu. Sonraki geçişte yeniden denenir.',
+    },
+  },
+  presence: {
+    unknown: 'kurulu makine sayısı bilinmiyor',
+    startupNone: 'hiçbir makinede etkin değil',
+    startupSome: '{count} makinede etkin',
+    appNone: 'hiçbir makinede kurulu değil',
+    appSome: '{count} makinede kurulu',
+    startupUnit: 'makinede etkin',
+    appUnit: 'makinede kurulu',
+    reported: '{count} makine bu öğe için rapor verdi',
+  },
+
+  section: {
+    blockNoGpo:
+      'Hiçbir makinede GPO izni açık değil. config.json’da allow_app_removal / allow_startup_control açılıp dağıtılmadan deneme sonucu gelmez.',
+    blockWaiting:
+      'Deneme modu kayıtlı, henüz sonuç gelmedi. GPO izni açık makineler ilk sonucu bir sonraki hijyen geçişinde (en geç hygiene_hours) gönderir.',
+    blockNeedDryRun: 'Önce deneme modunda kaydedin ve en az bir sonuç gelene kadar bekleyin.',
+    blockSelectionChanged: 'Seçimi değiştirdiniz — önce deneme modunda kaydedip sonucu görün.',
+    saved: 'Politika kaydedildi',
+    savedEnforce: 'Uygulama modu etkin — {count} makine kapsamda. Ajanlar bir sonraki bildirimlerinde işleme başlar.',
+    savedMode: 'Çalışma modu: {mode}.',
+    saveFailed: 'Politika kaydedilemedi',
+    notDeployedTitle: 'Uygulama kaldırma servisi yayında değil',
+    loadFailedTitle: 'Katalog yüklenemedi',
+    notDeployedBody:
+      'Bu sunucudaki sürüm henüz uygulama kaldırma API’sini içermiyor. Sunucu güncellendiğinde bu sekme kendiliğinden dolar.',
+    loadFailedBody: 'Katalog ve politika bilgisi alınamadı. Sayfayı yenilemeyi deneyin.',
+    liveEnforce: 'Kayıtlı çalışma modu: uygulama. {machines} makine kapsamda, seçili {apps} uygulama kaldırılıyor.',
+    liveMode: 'Kayıtlı çalışma modu: {mode}.',
+    intro:
+      'Panel yalnızca ajanla birlikte derlenmiş listeden seçim yapabilir; listeye yeni bir şey eklemek yeni bir ajan sürümü gerektirir. Her makinede GPO ile verilen yerel izin son sözü söyler — kapalıysa buradaki seçim o makinede hiçbir şey yapmaz.',
+    stale:
+      'Politika başka bir oturumda güncellendi. Düzenlemeniz korunuyor; sunucudaki sürümü yüklerseniz kaydedilmemiş değişiklikleriniz kaybolur.',
+    loadServer: 'Sunucudaki Sürümü Yükle',
+    unsavedTitle: 'Kaydedilmemiş Değişiklikler',
+    unsavedSummary: 'Seçili: {apps} uygulama, {startup} başlangıç öğesi.',
+    saveAndEnforce: 'Kaydet ve Uygula',
+    tabImpact: 'Kaldırmanın Etkisi',
+    tabFailures: 'Açık Hatalar',
+    tabLog: 'İşlem Kaydı',
+    resultsTabs: 'Kaldırma sonuçları',
+    confirmTitle: 'Filo Genelinde Kaldırmayı Başlat',
+    confirmLabel: 'Uygulamayı Başlat',
+    confirmBody:
+      'Kaydettiğinizde <b>{machines}</b> makine kapsama girer ve seçili {apps} uygulama bu makinelerden kaldırılır. Kaldırılan uygulamalar panelden geri yüklenemez.',
+    confirmType: 'Onaylamak için kapsamdaki makine sayısını yazın',
+    confirmHintOnline: '{count} makine şu anda çevrimiçi; kalanlar açıldıklarında politikayı uygular.',
+    confirmHintOffline: 'Çevrimdışı makineler de açıldıklarında bu politikayı uygular.',
+    confirmAck: 'Kaldırma işleminin geri alınamayacağını ve kullanıcıları etkileyebileceğini anlıyorum.',
+    confirmStartup: '{count} başlangıç öğesi yalnızca devre dışı bırakılır; kayıt silinmez ve daha sonra geri açılabilir.',
+    confirmKilled: '{count} makinede GPO izni kapalı — bu makinelerde hiçbir şey uygulanmayacak.',
+    confirmDrift: '{count} makinede ajan kataloğu eski — yeni öğeler “tanınmayan öğe” olarak dönecek.',
+  },
+
+  attempts: {
+    allOutcomes: 'Tüm Sonuçlar',
+    item: 'Öğe',
+    outcomes: 'Sonuçlar',
+    lastAction: 'Son İşlem',
+    time: 'Zaman',
+    action: 'İşlem',
+    outcome: 'Sonuç',
+    errorCode: 'Hata Kodu',
+    healedTitle: 'Bu hatadan sonra öğe makinede kaldırıldı veya artık bulunmuyor.',
+    healed: 'Sonradan Düzeldi',
+    byItemTitle: 'Öğe Bazında Sonuçlar',
+    byItemDryRun: 'Kayıtlardaki {count} işlem deneme modunda üretildi — bunlar makinelerde hiçbir değişiklik yapmadı.',
+    byItemBody: 'Ajanların bildirdiği işlemlerin öğe bazında özeti.',
+    emptyTitle: 'Henüz işlem kaydı yok',
+    emptyBody: 'Politika kaydedildikten sonra ajanlar bir sonraki bildirimde sonuçları buraya yazar.',
+    recentTitle: 'Son İşlemler',
+    recentBody: 'Ajanların bildirdiği denetim kaydı. Hata kodları koddur; işletim sistemi mesajı veya dosya yolu taşımaz.',
+    filterLabel: 'Sonuca göre filtrele',
+    noRecords: 'Kayıt bulunamadı',
+  },
+
+  catalog: {
+    safeDefault: 'Güvenli Varsayılan',
+    deprecated: 'Katalogdan Çıkarıldı',
+    title: 'Katalog',
+    body: 'Ajanın derlenmiş izin listesi. Panel yalnızca bu listeden seçebilir; başka bir şey gönderemez.',
+    selectSafe: 'Güvenli Varsayılanları Seç ({count})',
+    clear: 'Seçimi Temizle',
+    kindGroup: 'Öğe türü',
+    kindChipTitle: '{kind} — seçili sayısı',
+    appSummary: '{total} uygulama · {selected} seçili',
+    startupSummary: '{total} başlangıç öğesi · {selected} seçili',
+    searchPlaceholder: 'Uygulama, paket veya süreç ara…',
+    searchLabel: 'Katalogda ara',
+    riskGroup: 'Risk düzeyi filtresi',
+    allRisks: 'Tüm Riskler',
+    onlySelected: 'Yalnızca Seçili',
+    onlyPresentTitle: 'Yalnızca filoda gerçekten bulunan öğeler',
+    onlyPresent: 'Yalnızca Kurulu',
+    noMatchTitle: 'Eşleşen öğe yok',
+    noMatchBody: 'Arama ve filtreleri değiştirerek yeniden deneyin.',
+    selectAllIn: 'Tümü — {category} kategorisindeki öğeleri seç',
+    footnote:
+      'Seçim iki listede tutulur: uygulamalar kaldırılır, başlangıç öğeleri yalnızca devre dışı bırakılır (silinmez). Sekmeler arasında geçiş yapmak seçimi sıfırlamaz.',
+  },
+
+  failures: {
+    staleAgentLabel: 'Ajan Sürümü Eski',
+    staleAgentHint:
+      'Bu makinedeki ajan güncel sürümün gerisinde; hata büyük olasılıkla eski ajandan kaynaklanıyor ve kendiliğinden düzelmez. Önce ajanı GPO ile güncelleyin.',
+    staleAgentHintVersion:
+      'Bu makinedeki ajan güncel sürümün ({version}) gerisinde; hata büyük olasılıkla eski ajandan kaynaklanıyor ve kendiliğinden düzelmez. Önce ajanı GPO ile güncelleyin.',
+    timeoutLabel: 'Süre Doldu',
+    timeoutHint:
+      'Kaldırma süre sınırında bitmedi — çoğunlukla Store o sırada güncelleme yapıyordu veya makine yoğundu. Sonraki geçişte yeniden denenir.',
+    unknownItemLabel: 'Ajan Kataloğu Eski',
+    unknownItemHint: 'Bu makinedeki ajan öğeyi tanımıyor. Ajanı GPO ile güncel sürüme yükseltin.',
+    blockedLabel: 'Windows Engelledi',
+    blockedHint:
+      'Windows kaldırmayı reddetti. Tek uygulamadaysa paket korumalıdır, seçimden çıkarın; makinenin tüm uygulamalarındaysa makineyi inceleyin.',
+    unknownCodeLabel: 'Tanımlanmamış Kod',
+    noCodeLabel: 'Kodsuz Hata',
+    unknownCodeHint:
+      'Bu kod için kayıtlı bir açıklama yok. Makinedeki ajan günlüğünde aynı zamanlı “hygiene action” satırına bakın.',
+    item: 'Öğe',
+    itemCount: '{count} öğe',
+    reason: 'Neden',
+    expectation: 'Beklenti',
+    selfHealing: 'Kendiliğinden Düzelebilir',
+    needsAction: 'Müdahale Gerekir',
+    lastAttempt: 'Son Deneme',
+    title: 'Açık Hatalar',
+    summary:
+      'Son 90 günde başarısız olan {total} makine-öğe çiftinden {resolved} tanesi sonradan düzeldi (sonraki geçişte kaldırıldı ya da artık makinede yok). Aşağıda yalnızca hâlâ açık olan {open} tanesi var; aynı nedenle aynı makinelerde açık olanlar tek satırda toplanır.',
+    body: 'Son denemesi başarısız olan ve öğenin hâlâ makinede durduğu kayıtlar.',
+    loadFailedTitle: 'Hata özeti alınamadı',
+    notSupported: 'Sunucu bu görünümü henüz desteklemiyor olabilir; güncellendiğinde burası dolar.',
+    noneTitle: 'Açık hata yok',
+    noneAllResolved: 'Kayıtlarda görünen {count} başarısızlığın tamamı sonradan düzelmiş.',
+    noneBody: 'Hiçbir makinede bekleyen başarısız kaldırma yok.',
+  },
+
+  impact: {
+    windowOption: '{count} gün önce / sonra',
+    points: '{value} puan',
+    appsOn: '{count} uygulama · {date}',
+    title: 'Kaldırmanın Kullanım Oranlarına Etkisi',
+    body: 'Başarıyla kaldırma yapılan makinelerin, kaldırmadan önceki ve sonraki dönemdeki ortalama CPU ve RAM kullanımı. Yalnızca oturumun etkin olduğu saatler sayılır.',
+    windowLabel: 'Karşılaştırma penceresi',
+    loadFailedTitle: 'Etki verisi alınamadı',
+    noneTitle: 'Henüz başarılı kaldırma yok',
+    noneBody: 'Son 90 günde hiçbir makinede başarıyla kaldırılmış uygulama yok; karşılaştırılacak bir şey oluşmadı.',
+    avgCpu: 'Ortalama CPU',
+    avgRam: 'Ortalama RAM',
+    coverage: 'Kapsam',
+    coverageBody:
+      'Kaldırma yapılan {treated} makineden {included} tanesinde iki tarafta da en az {hours} etkin saat veri var; ortalama bunlardan. Kontrol grubu: {control} makine.',
+    netNote:
+      '<b>Net etki</b>, kaldırma yapılan makinelerdeki değişimden aynı dönemde hiçbir şey kaldırılmayan makinelerdeki değişimin çıkarılmasıyla bulunur — böylece tatil haftası veya Windows güncellemesi gibi filo geneli dalgalanmalar kaldırmaya yazılmaz. Ölçüm makine genelidir; aynı dönemdeki başka değişiklikleri de içerebilir.',
+    incomplete: '{count} makinede “sonra” penceresi henüz dolmadı; bu değerler kesinleşmedi.',
+    after: 'sonra',
+    treated: 'Kaldırma Yapılanlar',
+    control: 'Kontrol Grubu',
+    net: 'Net Etki',
+    app: 'Uygulama',
+    removedFrom: 'Kaldırıldığı Makine',
+    seenBefore: 'Önceden Çalışırken Görüldü',
+    ownCpu: 'Kendi CPU’su',
+    ownMem: 'Kendi Belleği',
+    afterCol: 'Sonra',
+    cameBackTitle: 'Kaldırmadan sonra bu uygulamanın süreci yeniden görüldü — geri yüklenmiş olabilir.',
+    cameBack: '{count} makinede geri döndü',
+    notSeen: 'Görülmedi',
+    perAppTitle: 'Uygulama Bazında Doğrudan Tasarruf',
+    perAppBody:
+      'Kaldırılan uygulamanın kendi süreçlerinin, kaldırmadan önce çalıştığı anlardaki ortalama CPU ve bellek kullanımı. Ajan her örnekte yalnızca en yoğun süreçleri gönderdiği için bu değerler alt sınırdır; “—” uygulamanın hiç öne çıkmadığı anlamına gelir.',
+    activeHours: 'Etkin Saat',
+    hoursBeforeAfter: '{before} önce · {after} sonra',
+    windowOpen: 'Pencere Sürüyor',
+    perMachineTitle: 'Makine Bazında',
+    perMachineBody: 'Etkin saati {hours}’ten az olan taraflar turuncu gösterilir ve filo ortalamasına katılmaz.',
+  },
+
+  modeControl: {
+    title: 'Çalışma Modu',
+    body: 'Ajanların bu politikayla ne yapacağını belirler. Deneme modu varsayılandır.',
+    saved: 'Kayıtlı: {mode}',
+    enforceWarning:
+      'Kaydettiğinizde bu geri alınamaz: seçili uygulamalar hedeflenen makinelerden kaldırılacak. Başlangıç öğeleri yalnızca devre dışı bırakılır ve daha sonra geri açılabilir.',
+    lastDryRun: 'Son deneme sonucu: <b>{when}</b>',
+    liveEnforce: 'Çalışma modu uygulama olarak seçildi. Kaydedildiğinde seçili uygulamalar makinelerden kaldırılacak.',
+    liveMode: 'Çalışma modu {mode} olarak seçildi.',
+  },
+
+  diff: {
+    none: 'Kaydedilmemiş değişiklik yok.',
+    mode: 'Çalışma Modu',
+    added: 'Listeye eklenen ({count})',
+    removed: 'Listeden çıkarılan ({count})',
+    tags: 'Hariç tutulan etiketler:',
+  },
+
+  summary: {
+    targeted: 'Kapsanan Makine',
+    targetedHint: '{fleet} Windows makinesinden {excluded} tanesi etiketle hariç tutuldu · {online} tanesi çevrimiçi',
+    fleetLoading: 'Filo listesi yükleniyor',
+    reporting: 'Hijyen Durumu Bildiren',
+    reportingHint: '{count} makine kayıtlı politika sürümünü uygulamış durumda.',
+    drift: 'Ajan Kataloğu Eski',
+    driftHint:
+      '{count} makinede ajan kataloğu eski — bu makineler yeni öğeleri tanımaz ve “tanınmayan öğe” döner. Ajanı GPO ile güncelleyin.',
+    driftNone: 'Tüm ajanlar sunucuyla aynı katalog sürümünde.',
+    killed: 'GPO İzni Kapalı',
+    killedHint:
+      '{count} makinede GPO izni kapalı — yerel kill switch kapalıyken buradan ne seçilirse seçilsin hiçbir şey uygulanmaz.',
+    killedNone: 'Tüm makinelerde yerel izin açık.',
+    silentNote:
+      'Bu makinelerde politika sessizce hiçbir şey yapmaz. Sonuçları değerlendirirken <b>“GPO izni yok”</b> ve <b>“tanınmayan öğe”</b> sonuçlarını bu iki sayıyla birlikte okuyun.',
+  },
+
+  tags: {
+    title: 'Hariç Tutulan Etiketler',
+    body: 'Bu etiketlerden birini taşıyan makinelere hiçbir işlem uygulanmaz.',
+    excludedCount: '{count} makine hariç',
+    selected: 'Seçili',
+    noneSelected: 'Hiçbir etiket hariç tutulmadı — politika tüm Windows makinelerini kapsar.',
+    unusedTag: 'Bu etiketi şu anda hiçbir makine taşımıyor',
+    stopExcluding: '{tag} etiketini hariç tutmayı bırak',
+    fleetTags: 'Filodaki Etiketler',
+    fleetTagsGroup: 'Filodaki makine etiketleri',
+    exclude: '{tag} etiketini hariç tut ({count} makine)',
+    addPlaceholder: 'Listede olmayan bir etiket ekle',
+    addLabel: 'Hariç tutulacak etiket ekle',
+    footnote:
+      'Etiket listesi filo görünümünden çıkarıldı (ayrı bir etiket servisi yok), bu yüzden yalnızca en az bir makinede kullanılan etiketleri gösterir. Elle yazdığınız etiket de kaydedilir; bugün hiçbir makine taşımıyorsa kimseyi hariç tutmaz.',
+  },
+}

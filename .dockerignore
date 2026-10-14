@@ -1,0 +1,17 @@
+# Build contexts are the repo root (server/Dockerfile, web/Dockerfile).
+.git
+.claude
+CLAUDE.local.md
+**/node_modules
+**/dist
+**/.env
+**/*.env
+!**/*.env.example
+deploy/gpo/NETLOGON-*/
+deploy/data
+deploy/tls
+*.tgz
+*.tar.gz
+*.docx
+*.exe
+*.log

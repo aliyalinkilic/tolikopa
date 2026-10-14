@@ -1,0 +1,264 @@
+{
+  "schema": 1,
+  "_readme": [
+    "CANONICAL COPY. server/internal/appcatalog/catalog.json is generated from this file",
+    "by server/tools/synccatalog — never hand-edit the server copy.",
+    "",
+    "BEFORE ENABLING REMOVAL ON A REAL OU: reconcile every `family` below against a",
+    "reference image with `Get-AppxPackage -AllUsers | Select PackageFamilyName`.",
+    "Publisher hashes and package identities change between Windows releases, and a",
+    "family that does not match simply never matches anything (fail-safe, but silently",
+    "useless). risk_tier=review means an admin must make a deliberate call: the app is",
+    "safely removable, but somebody in the org may actually be using it.",
+    "",
+    "For kind=startup, `family` is the registry Run VALUE NAME, compared case-insensitively and",
+    "EXACTLY unless the item sets \"match\": \"prefix\". Prefix is opt-in because short families",
+    "over-match real software: \"Skype\" would catch Skype for Business, \"OneDrive\" would catch",
+    "OneDriveSetup. A family that matches nothing is harmless; one that matches too much is not.",
+    "It is never the value DATA, which is a file path (a forbidden data class)."
+  ],
+  "items": [
+    { "kind": "app", "item_id": "weather", "family": "Microsoft.BingWeather_8wekyb3d8bbwe",
+      "display_name": "Hava Durumu (MSN)", "category": "medya", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "process_names": ["msnweather"],
+      "notes": "WebView2 tabanlı web sarmalayıcı; boşta 500-600 MB, harita etkileşiminde 1,6 GB RAM." },
+
+    { "kind": "app", "item_id": "news", "family": "Microsoft.BingNews_8wekyb3d8bbwe",
+      "display_name": "Haberler (MSN)", "category": "medya", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "process_names": ["msnnews"],
+      "notes": "Hava Durumu ile aynı WebView2 altyapısı ve aynı reklam yükü." },
+
+    { "kind": "app", "item_id": "solitaire", "family": "Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe",
+      "display_name": "Solitaire Koleksiyonu", "category": "oyun", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "process_names": ["solitaire"],
+      "notes": "Reklamlı oyun. Pro sürümlerde ContentDeliveryManager tarafından geri yüklenebilir." },
+
+    { "kind": "app", "item_id": "gaming_app", "family": "Microsoft.GamingApp_8wekyb3d8bbwe",
+      "display_name": "Xbox", "category": "oyun", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "process_names": ["xboxpcapp"] },
+
+    { "kind": "app", "item_id": "xbox_app_legacy", "family": "Microsoft.XboxApp_8wekyb3d8bbwe",
+      "display_name": "Xbox Konsol Yardımcısı (eski)", "category": "oyun", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "notes": "Windows 10 imajlarında bulunur." },
+
+    { "kind": "app", "item_id": "xbox_gaming_overlay", "family": "Microsoft.XboxGamingOverlay_8wekyb3d8bbwe",
+      "display_name": "Xbox Game Bar", "category": "oyun", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "process_names": ["gamebar", "gamebarftserver"] },
+
+    { "kind": "app", "item_id": "xbox_game_overlay", "family": "Microsoft.XboxGameOverlay_8wekyb3d8bbwe",
+      "display_name": "Xbox Game Bar eklentisi", "category": "oyun", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "xbox_tcui", "family": "Microsoft.Xbox.TCUI_8wekyb3d8bbwe",
+      "display_name": "Xbox canlı deneyim bileşeni", "category": "oyun", "risk_tier": "review", "scope": "both",
+      "safe_default": false, "notes": "Bazı Store oyunları oturum açma için buna bağlıdır." },
+
+    { "kind": "app", "item_id": "xbox_speech_overlay", "family": "Microsoft.XboxSpeechToTextOverlay_8wekyb3d8bbwe",
+      "display_name": "Xbox konuşma-metin bindirmesi", "category": "oyun", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "mixed_reality", "family": "Microsoft.MixedReality.Portal_8wekyb3d8bbwe",
+      "display_name": "Karma Gerçeklik Portalı", "category": "medya", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "notes": "Microsoft tarafından kullanımdan kaldırıldı." },
+
+    { "kind": "app", "item_id": "feedback_hub", "family": "Microsoft.WindowsFeedbackHub_8wekyb3d8bbwe",
+      "display_name": "Geri Bildirim Merkezi", "category": "sistem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "get_help", "family": "Microsoft.GetHelp_8wekyb3d8bbwe",
+      "display_name": "Yardım Al", "category": "sistem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "get_started", "family": "Microsoft.Getstarted_8wekyb3d8bbwe",
+      "display_name": "İpuçları", "category": "sistem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "office_hub", "family": "Microsoft.MicrosoftOfficeHub_8wekyb3d8bbwe",
+      "display_name": "Office (tanıtım kısayolu)", "category": "üretkenlik", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "notes": "Kurulu Office'i etkilemez; yalnızca Store tanıtım kabuğudur." },
+
+    { "kind": "app", "item_id": "skype", "family": "Microsoft.SkypeApp_kzf8qxf38zg5c",
+      "display_name": "Skype", "category": "iletişim", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "process_names": ["skype"] },
+
+    { "kind": "app", "item_id": "teams_consumer", "family": "MicrosoftTeams_8wekyb3d8bbwe",
+      "display_name": "Teams (kişisel / Sohbet)", "category": "iletişim", "risk_tier": "safe", "scope": "both",
+      "safe_default": true,
+      "notes": "Tüketici sürümü. Kurumsal Teams ayrı bir pakettir (MSTeams_8wekyb3d8bbwe) ve bu listede yoktur." },
+
+    { "kind": "app", "item_id": "people", "family": "Microsoft.People_8wekyb3d8bbwe",
+      "display_name": "Kişiler", "category": "iletişim", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "maps", "family": "Microsoft.WindowsMaps_8wekyb3d8bbwe",
+      "display_name": "Haritalar", "category": "medya", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "process_names": ["maps"] },
+
+    { "kind": "app", "item_id": "clipchamp", "family": "Clipchamp.Clipchamp_yxz26nhyzhsrt",
+      "display_name": "Clipchamp video düzenleyici", "category": "medya", "risk_tier": "safe", "scope": "both",
+      "safe_default": true,
+      "notes": "Yayıncı hash'i imajdan imaja değişebilir — referans makinede doğrulayın." },
+
+    { "kind": "app", "item_id": "zune_video", "family": "Microsoft.ZuneVideo_8wekyb3d8bbwe",
+      "display_name": "Filmler ve TV", "category": "medya", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "zune_music", "family": "Microsoft.ZuneMusic_8wekyb3d8bbwe",
+      "display_name": "Media Player", "category": "medya", "risk_tier": "review", "scope": "both",
+      "safe_default": false,
+      "notes": "Windows 11'in varsayılan medya oynatıcısıdır; kaldırılırsa ses/video dosyaları açılmaz." },
+
+    { "kind": "app", "item_id": "cortana", "family": "Microsoft.549981C3F5F10_8wekyb3d8bbwe",
+      "display_name": "Cortana", "category": "sistem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "process_names": ["cortana"] },
+
+    { "kind": "app", "item_id": "mail_calendar", "family": "microsoft.windowscommunicationsapps_8wekyb3d8bbwe",
+      "display_name": "Posta ve Takvim", "category": "üretkenlik", "risk_tier": "review", "scope": "both",
+      "safe_default": false,
+      "notes": "Microsoft kullanımdan kaldırdı, ama hâlâ kullanan personel olabilir — önce sorun." },
+
+    { "kind": "app", "item_id": "your_phone", "family": "Microsoft.YourPhone_8wekyb3d8bbwe",
+      "display_name": "Telefon Bağlantısı", "category": "iletişim", "risk_tier": "review", "scope": "both",
+      "safe_default": false },
+
+    { "kind": "app", "item_id": "sticky_notes", "family": "Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe",
+      "display_name": "Yapışkan Notlar", "category": "üretkenlik", "risk_tier": "review", "scope": "both",
+      "safe_default": false, "notes": "Kaldırılırsa kullanıcının kayıtlı notlarına erişimi kesilir." },
+
+    { "kind": "app", "item_id": "todos", "family": "Microsoft.Todos_8wekyb3d8bbwe",
+      "display_name": "Microsoft To Do", "category": "üretkenlik", "risk_tier": "review", "scope": "both",
+      "safe_default": false },
+
+    { "kind": "app", "item_id": "sound_recorder", "family": "Microsoft.WindowsSoundRecorder_8wekyb3d8bbwe",
+      "display_name": "Ses Kaydedici", "category": "medya", "risk_tier": "review", "scope": "both",
+      "safe_default": false },
+
+    { "kind": "app", "item_id": "alarms_clock", "family": "Microsoft.WindowsAlarms_8wekyb3d8bbwe",
+      "display_name": "Saat (Alarmlar ve Saat)", "category": "üretkenlik", "risk_tier": "review", "scope": "both",
+      "safe_default": false, "notes": "Odak seansları özelliği burada; kullananlar olabilir." },
+
+    { "kind": "app", "item_id": "quick_assist", "family": "MicrosoftCorporationII.QuickAssist_8wekyb3d8bbwe",
+      "display_name": "Hızlı Yardım", "category": "sistem", "risk_tier": "review", "scope": "both",
+      "safe_default": false, "notes": "BT ekibi uzaktan destek için kullanıyor olabilir — dikkat." },
+
+    { "kind": "app", "item_id": "power_automate", "family": "Microsoft.PowerAutomateDesktop_8wekyb3d8bbwe",
+      "display_name": "Power Automate Desktop", "category": "üretkenlik", "risk_tier": "review", "scope": "both",
+      "safe_default": false },
+
+    { "kind": "app", "item_id": "dev_home", "family": "Microsoft.Windows.DevHome_8wekyb3d8bbwe",
+      "display_name": "Dev Home", "category": "üretkenlik", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "notes": "Geliştirici olmayan bir filoda karşılığı yok." },
+
+    { "kind": "app", "item_id": "outlook_new", "family": "Microsoft.OutlookForWindows_8wekyb3d8bbwe",
+      "display_name": "Yeni Outlook", "category": "üretkenlik", "risk_tier": "review", "scope": "both",
+      "safe_default": false,
+      "notes": "Windows Update tarafından yeniden kurulabilir; klasik Outlook'u etkilemez." },
+
+    { "kind": "app", "item_id": "copilot", "family": "Microsoft.Copilot_8wekyb3d8bbwe",
+      "display_name": "Copilot", "category": "sistem", "risk_tier": "advanced", "scope": "both",
+      "safe_default": false,
+      "notes": "24H2+ sürümlerde yapay zekâ bileşenleri korumalıdır; kaldırma 874 olayıyla reddedilebilir." },
+
+    { "kind": "app", "item_id": "bing_search", "family": "Microsoft.BingSearch_8wekyb3d8bbwe",
+      "display_name": "Başlat menüsü web araması", "category": "sistem", "risk_tier": "advanced", "scope": "both",
+      "safe_default": false,
+      "notes": "TEHLİKELİ: 25H2'de Başlat menüsü aramasını bozabilir. Önce tek makinede deneyin." },
+
+    { "kind": "app", "item_id": "spotify", "family": "SpotifyAB.SpotifyMusic_zpdnekdrzrea0",
+      "display_name": "Spotify (OEM)", "category": "oem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true, "process_names": ["spotify"] },
+
+    { "kind": "app", "item_id": "disney_plus", "family": "Disney.37853FC22B2CE_6rarf9sa4v8jt",
+      "display_name": "Disney+ (OEM)", "category": "oem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "tiktok", "family": "BytedancePte.Ltd.TikTok_6yccndn6064se",
+      "display_name": "TikTok (OEM)", "category": "oem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "instagram", "family": "Facebook.InstagramBeta_8xx8rvfyw5nnt",
+      "display_name": "Instagram (OEM)", "category": "oem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "prime_video", "family": "AmazonVideo.PrimeVideo_pwbj9vvecjh7j",
+      "display_name": "Prime Video (OEM)", "category": "oem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "netflix", "family": "4DF9E0F8.Netflix_mcm4njqhnhss8",
+      "display_name": "Netflix (OEM)", "category": "oem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "candy_crush", "family": "king.com.CandyCrushSaga_kgqvnymyfvs32",
+      "display_name": "Candy Crush Saga (OEM)", "category": "oem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "app", "item_id": "linkedin", "family": "7EE7776C.LinkedInforWindows_w1wdnht996qgy",
+      "display_name": "LinkedIn (OEM)", "category": "oem", "risk_tier": "safe", "scope": "both",
+      "safe_default": true },
+
+    { "kind": "startup", "item_id": "startup.teams", "family": "com.squirrel.Teams.Teams",
+      "display_name": "Teams (kişisel) — oturum açılışında", "category": "iletişim", "risk_tier": "safe",
+      "safe_default": true, "process_names": ["teams"] },
+
+    { "kind": "startup", "item_id": "startup.spotify", "family": "Spotify",
+      "display_name": "Spotify — oturum açılışında", "category": "medya", "risk_tier": "safe",
+      "safe_default": true, "process_names": ["spotify"] },
+
+    { "kind": "startup", "item_id": "startup.steam", "family": "Steam",
+      "display_name": "Steam — oturum açılışında", "category": "oyun", "risk_tier": "safe",
+      "safe_default": true, "process_names": ["steam"] },
+
+    { "kind": "startup", "item_id": "startup.epic", "family": "EpicGamesLauncher",
+      "display_name": "Epic Games — oturum açılışında", "category": "oyun", "risk_tier": "safe",
+      "safe_default": true },
+
+    { "kind": "startup", "item_id": "startup.discord", "family": "Discord",
+      "display_name": "Discord — oturum açılışında", "category": "iletişim", "risk_tier": "safe",
+      "safe_default": true, "process_names": ["discord"] },
+
+    { "kind": "startup", "item_id": "startup.adobe_updater", "family": "AdobeAAMUpdater",
+      "match": "prefix",
+      "display_name": "Adobe güncelleyici — oturum açılışında", "category": "sistem", "risk_tier": "safe",
+      "safe_default": true, "notes": "Gerçek değer adı sürüm soneki taşır (AdobeAAMUpdater-1.0)." },
+
+    { "kind": "startup", "item_id": "startup.adobe_gc", "family": "AdobeGCInvoker",
+      "match": "prefix",
+      "display_name": "Adobe lisans denetleyici — oturum açılışında", "category": "sistem", "risk_tier": "safe",
+      "safe_default": true, "notes": "Gerçek değer adı sürüm soneki taşır (AdobeGCInvoker-1.0)." },
+
+    { "kind": "startup", "item_id": "startup.skype", "family": "Skype",
+      "display_name": "Skype — oturum açılışında", "category": "iletişim", "risk_tier": "safe",
+      "safe_default": true, "process_names": ["skype"] },
+
+    { "kind": "startup", "item_id": "startup.itunes", "family": "iTunesHelper",
+      "display_name": "iTunes yardımcısı — oturum açılışında", "category": "medya", "risk_tier": "safe",
+      "safe_default": true },
+
+    { "kind": "startup", "item_id": "startup.java", "family": "SunJavaUpdateSched",
+      "display_name": "Java güncelleyici — oturum açılışında", "category": "sistem", "risk_tier": "safe",
+      "safe_default": true },
+
+    { "kind": "startup", "item_id": "startup.ccleaner", "family": "CCleaner Smart Cleaning",
+      "display_name": "CCleaner — oturum açılışında", "category": "sistem", "risk_tier": "safe",
+      "safe_default": true },
+
+    { "kind": "startup", "item_id": "startup.zoom", "family": "Zoom",
+      "display_name": "Zoom — oturum açılışında", "category": "iletişim", "risk_tier": "review",
+      "safe_default": false, "notes": "Toplantıya girişi yavaşlatabilir; kullanan birimler olabilir." },
+
+    { "kind": "startup", "item_id": "startup.onedrive", "family": "OneDrive",
+      "display_name": "OneDrive — oturum açılışında", "category": "üretkenlik", "risk_tier": "review",
+      "safe_default": false,
+      "notes": "DİKKAT: kurum OneDrive ile dosya eşitliyorsa kapatmak eşitlemeyi durdurur." },
+
+    { "kind": "startup", "item_id": "startup.edge", "family": "MicrosoftEdgeAutoLaunch",
+      "match": "prefix",
+      "display_name": "Edge otomatik başlatma", "category": "sistem", "risk_tier": "review",
+      "safe_default": false,
+      "notes": "Değer adı makineye özgü bir sonek taşır; tek önek eşleşmeli katalog girdisidir." },
+
+    { "kind": "startup", "item_id": "startup.onenote", "family": "SendToOneNote",
+      "display_name": "OneNote'a Gönder — oturum açılışında", "category": "üretkenlik", "risk_tier": "safe",
+      "safe_default": true }
+  ]
+}

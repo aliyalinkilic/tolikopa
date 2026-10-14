@@ -1,0 +1,64 @@
+# Tolikopa edge: TLS + SPA static + reverse proxy to the API.
+# SERVER_HOST is injected by compose: the panel's DNS name and the server's IP
+# ("tolikopa.corp.local 10.0.0.10"), the names setup.sh put in the certificate.
+
+{
+	admin off
+	# A client that sends no SNI (an agent connecting to an IP literal) gets the
+	# certificate for this name; it covers the IP as well.
+	default_sni {$DEFAULT_SNI:localhost}
+}
+
+{$SERVER_HOST:localhost} {
+	# Self-signed certificate created by setup.sh (deploy/tls). Agents pin it and
+	# tolikopa-setup.exe makes domain PCs trust it through the GPO.
+	tls /etc/caddy/tls/tolikopa.crt /etc/caddy/tls/tolikopa.key
+	encode zstd gzip
+
+	log {
+		output stdout
+		format console
+	}
+
+	route {
+		# 1) Ingest is internal-only: allow RFC1918 + loopback, block anything public.
+		@ingest_external {
+			path /api/v1/ingest
+			not remote_ip 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 ::1
+		}
+		respond @ingest_external "forbidden" 403
+
+		# 2) API + WebSocket → backend. reverse_proxy is terminal for matching paths;
+		#    non-matching requests fall through to the SPA handler below.
+		#    X-Forwarded-For is REPLACED, not appended: Caddy's default is to append,
+		#    so a client that sends its own X-Forwarded-For would prepend a value the
+		#    backend then records as the actor IP in remediation_policy_audit — the
+		#    permanent record of who armed fleet-wide app removal. header_up with a
+		#    single value overwrites the header, so the chain always has exactly one
+		#    element and it is Caddy's own view of the peer.
+		reverse_proxy /api/* api:8080 {
+			header_up X-Forwarded-For {remote_host}
+		}
+		reverse_proxy /ws api:8080 {
+			header_up X-Forwarded-For {remote_host}
+			# keep WebSocket connections alive
+			transport http {
+				read_timeout 10m
+				write_timeout 10m
+			}
+		}
+
+		# 3) SPA: serve static build, fall back to index.html for client-side routes.
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		# Sensible security headers for an internal panel.
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}

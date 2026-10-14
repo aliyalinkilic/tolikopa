@@ -1,0 +1,58 @@
+# --- Secrets (NEVER commit) ---
+.env
+*.env
+!*.env.example
+deploy/.env
+# TLS certificate + private key created by setup.sh
+deploy/tls/
+**/config.json
+!deploy/gpo/config.example.json
+*.pem
+*.key
+*.crt
+!**/testdata/**
+
+# --- Go ---
+agent/dist/
+server/dist/
+*.exe
+*.test
+*.out
+vendor/
+
+# --- Node / web ---
+node_modules/
+web/dist/
+web/.vite/
+*.local
+npm-debug.log*
+
+# --- Docker / runtime data ---
+deploy/data/
+caddy_data/
+caddy_config/
+pgdata/
+
+# --- Agent runtime (should never be in repo) ---
+spool/
+state/
+logs/
+*.log
+
+# --- Editor / OS ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# --- Site-specific / local-only (never publish) ---
+CLAUDE.local.md
+deploy/gpo/NETLOGON-*/
+*.tgz
+*.tar.gz
+/start.docx
+setup/dist/
+
+# Claude Code (local tooling, not part of the product)
+.claude/

@@ -1,0 +1,13 @@
+# Text files are stored and checked out with LF everywhere. The images are built on
+# Linux from this tree: a CR in VERSION, a Dockerfile, the Caddyfile or a shell script
+# breaks the build or the runtime, so nothing is left to core.autocrlf.
+* text=auto eol=lf
+
+*.exe binary
+*.png binary
+*.ico binary
+*.jpg binary
+*.woff2 binary
+*.docx binary
+*.zip binary
+*.tgz binary

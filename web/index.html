@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0a0e1a" />
+    <meta name="description" content="Tolikopa — IT fleet monitoring panel" />
+    <title>Tolikopa</title>
+    <!--
+      Runs before first paint so the page never flashes the wrong theme or language.
+      Must stay in step with src/lib/prefs.ts: same storage keys, same attributes,
+      same defaults ("system" theme; language from storage, else the browser, else tr).
+      If a Content-Security-Policy with script-src 'self' is ever added, give this
+      block a hash/nonce or move it to a same-origin file loaded synchronously.
+    -->
+    <script>
+      ;(function () {
+        var root = document.documentElement
+        var theme = 'system'
+        var lang = null
+        try {
+          theme = localStorage.getItem('tolikopa-theme') || theme
+          lang = localStorage.getItem('tolikopa-lang')
+        } catch (e) {}
+        if (theme !== 'dark' && theme !== 'light') {
+          theme = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+        }
+        root.setAttribute('data-theme', theme)
+        root.style.colorScheme = theme
+        var color = document.querySelector('meta[name="theme-color"]')
+        if (color) color.setAttribute('content', theme === 'light' ? '#f3f5fa' : '#0a0e1a')
+        if (lang !== 'tr' && lang !== 'en') {
+          lang = null
+          var list = navigator.languages || [navigator.language || '']
+          for (var i = 0; i < list.length && !lang; i++) {
+            var base = String(list[i]).slice(0, 2).toLowerCase()
+            if (base === 'tr' || base === 'en') lang = base
+          }
+        }
+        root.lang = lang || 'tr'
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

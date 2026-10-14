@@ -1,0 +1,107 @@
+# Named volumes are prefixed with the project name. An installation created under an
+# older project name keeps its data by setting COMPOSE_PROJECT_NAME in .env (it takes
+# precedence over this line) — see docs/UPGRADING.md.
+name: tolikopa
+
+# Three services. DB and API ports are NOT published to the host — only Caddy (web)
+# is reachable from the LAN, on 443. Run from this directory: `docker compose up -d --build`.
+
+services:
+  db:
+    image: timescale/timescaledb:2.27.0-pg17   # fallback tag if unavailable: latest-pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tolikopa}
+      POSTGRES_DB: ${POSTGRES_DB:-tolikopa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      TZ: ${TZ:-Europe/Istanbul}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tolikopa} -d ${POSTGRES_DB:-tolikopa}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..                 # repo root: also compiles agent/ and setup/ (see the Dockerfile)
+      dockerfile: server/Dockerfile
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_USER:-tolikopa}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-tolikopa}?sslmode=disable"
+      LISTEN_ADDR: ":8080"
+      INGEST_TOKEN: ${INGEST_TOKEN:?INGEST_TOKEN is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      # First run: the panel asks for this one-time code before it lets anyone create
+      # the first admin account. Empty = the API generates one and prints it to its log.
+      SETUP_CODE: ${SETUP_CODE:-}
+      # Optional legacy seeding of the first admin (installations created before the
+      # setup wizard). Leave unset on new installs.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # The panel's TLS CERTIFICATE only (never the key): it goes into the agents'
+      # config.json and into tolikopa-setup.exe.
+      TLS_CERT_FILE: /tls/tolikopa.crt
+      SERVER_HOST: ${SERVER_HOST:-localhost}
+      OFFLINE_WARN_SEC: ${OFFLINE_WARN_SEC:-300}
+      OFFLINE_CRIT_SEC: ${OFFLINE_CRIT_SEC:-1800}
+      # Optional e-mail notifications (disabled unless SMTP_ENABLED=true)
+      SMTP_ENABLED: ${SMTP_ENABLED:-false}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      TZ: ${TZ:-Europe/Istanbul}
+    volumes:
+      # create_host_path: false — a missing file is an error, not an empty directory.
+      - type: bind
+        source: ./tls/tolikopa.crt
+        target: /tls/tolikopa.crt
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/api/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..                 # repo root: needs web/ and deploy/caddy/Caddyfile
+      dockerfile: web/Dockerfile
+    environment:
+      # SERVER_HOST: the site addresses ("tolikopa.corp.local 10.0.0.10");
+      # DEFAULT_SNI: the name whose certificate a client without SNI gets.
+      SERVER_HOST: ${SERVER_HOST:-localhost}
+      DEFAULT_SNI: ${DEFAULT_SNI:-localhost}
+      TZ: ${TZ:-Europe/Istanbul}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+      # Certificate + private key from setup.sh. Only this container sees the key.
+      - type: bind
+        source: ./tls
+        target: /etc/caddy/tls
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

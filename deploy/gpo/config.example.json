@@ -1,0 +1,14 @@
+{
+  "backend_url": "https://10.0.0.10",
+  "ingest_token": "INGEST_TOKEN-FROM-THE-SERVER",
+  "tls_ca_pem": "-----BEGIN CERTIFICATE-----\nCONTENTS-OF-deploy/tls/tolikopa.crt-ON-THE-SERVER\n-----END CERTIFICATE-----\n",
+  "intervals": { "vitals_sec": 15, "sample_sec": 60, "post_sec": 60, "smart_min": 45 },
+  "top_n": 10,
+  "spool_max_mb": 50,
+  "log_level": "info",
+
+  "allow_app_removal": true,
+  "allow_startup_control": true,
+  "enforce_actions": true,
+  "hygiene_hours": 6
+}

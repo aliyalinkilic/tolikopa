@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  REFERENCE: GPP Scheduled Task (Update) definition. tolikopa-setup.exe creates this task for
+  you; the manual route is the GPMC editor (see docs/GPO-DEPLOYMENT.md). This file is for
+  advanced/scripted imports and documents the exact settings. Use the same settings in the editor:
+    Computer Configuration > Preferences > Control Panel Settings > Scheduled Tasks
+    New > Scheduled Task (At least Windows 7), Action = Update
+    User = NT AUTHORITY\SYSTEM, Run whether logged on or not, Highest privileges, Hidden
+    Triggers: At startup + Daily
+    Action: powershell.exe -WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass
+            -File \\CORP\NETLOGON\Tolikopa\bootstrap.ps1
+-->
+<ScheduledTasks clsid="{CC63F200-7309-4ba0-B154-A71CD118DBCC}">
+  <TaskV2 clsid="{D8896631-B747-47a7-84A6-C155337F3BC8}" name="TolikopaAgent"
+          image="0" changed="2026-07-03 00:00:00" uid="{00000000-0000-0000-0000-000000000001}">
+    <Properties action="U" name="TolikopaAgent" runAs="NT AUTHORITY\System" logonType="S4U">
+      <Task version="1.2">
+        <RegistrationInfo>
+          <Author>CORP\tolikopa</Author>
+          <Description>Installs, updates and repairs the Tolikopa monitoring agent from NETLOGON (idempotent).</Description>
+        </RegistrationInfo>
+        <Principals>
+          <Principal id="Author">
+            <UserId>NT AUTHORITY\System</UserId>
+            <RunLevel>HighestAvailable</RunLevel>
+          </Principal>
+        </Principals>
+        <Settings>
+          <Enabled>true</Enabled>
+          <Hidden>true</Hidden>
+          <AllowStartOnDemand>true</AllowStartOnDemand>
+          <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+          <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+          <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+          <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>
+          <RestartOnFailure>
+            <Interval>PT5M</Interval>
+            <Count>3</Count>
+          </RestartOnFailure>
+        </Settings>
+        <Triggers>
+          <BootTrigger>
+            <Enabled>true</Enabled>
+            <Delay>PT1M</Delay>
+          </BootTrigger>
+          <CalendarTrigger>
+            <StartBoundary>2026-07-03T08:00:00</StartBoundary>
+            <Enabled>true</Enabled>
+            <ScheduleByDay>
+              <DaysInterval>1</DaysInterval>
+            </ScheduleByDay>
+          </CalendarTrigger>
+        </Triggers>
+        <Actions>
+          <Exec>
+            <Command>powershell.exe</Command>
+            <Arguments>-WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass -File \\CORP\NETLOGON\Tolikopa\bootstrap.ps1</Arguments>
+          </Exec>
+        </Actions>
+      </Task>
+    </Properties>
+  </TaskV2>
+</ScheduledTasks>
