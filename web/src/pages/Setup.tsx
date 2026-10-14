@@ -230,7 +230,7 @@ function UpdateCard({ state }: { state: SetupState }) {
           </div>
         </div>
         {available && (
-          <DownloadButton file="tolikopa-update.exe" variant="primary" className="shrink-0">
+          <DownloadButton file="tolikopa-update.zip" variant="primary" className="shrink-0">
             {t('setup.update.download')}
           </DownloadButton>
         )}
@@ -274,7 +274,7 @@ function DomainSection({ state }: { state: SetupState }) {
         <Card>
           <CardHeader title={t('setup.domain.redownloadTitle')} description={t('setup.domain.redownloadBody')} />
           <div className="mt-4 flex flex-wrap items-center gap-3">
-            <DownloadButton file="tolikopa-setup.exe" variant="primary" disabled={dirty || !ready}>
+            <DownloadButton file="tolikopa-setup.zip" variant="primary" disabled={dirty || !ready}>
               {t('setup.run.download')}
             </DownloadButton>
             {dirty && <span className="text-[12px] text-warn">{t('setup.domain.unsaved')}</span>}

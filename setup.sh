@@ -576,7 +576,7 @@ echo "              $(L "geçerlilik sonu" "valid until"): $until_date"
 echo
 echo "$(L "Sıradaki adımlar:" "Next steps:")"
 echo "  1. $(L "Panele girin. Tarayıcı sertifika uyarısı verecek: parmak izi yukarıdakiyle aynıysa devam edin." "Open the panel. The browser warns about the certificate: continue if the fingerprint matches the one above.")"
-echo "  2. $(L "Kurulum sihirbazında etki alanı bilgilerini girip tolikopa-setup.exe dosyasını indirin." "In the setup wizard enter the domain details and download tolikopa-setup.exe.")"
+echo "  2. $(L "Kurulum sihirbazında etki alanı bilgilerini girip tolikopa-setup.zip dosyasını indirin ve tek bir klasöre çıkarın." "In the setup wizard enter the domain details, download tolikopa-setup.zip and extract it into one folder.")"
 echo "  3. $(L "Aracı etki alanına bağlı bir yönetici bilgisayarında çalıştırın: ajanı dağıtır, $PANEL_HOST DNS kaydını oluşturur ve bu sertifikayı GPO ile bilgisayarlara güvenilir yapar." "Run it on a domain-joined admin PC: it deploys the agent, creates the $PANEL_HOST DNS record and makes the PCs trust this certificate through the GPO.")"
 echo
 echo "  $(L "Güncelleme" "Update"):  cd $REPO_ROOT && git pull && sudo ./setup.sh"

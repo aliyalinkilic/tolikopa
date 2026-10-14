@@ -8,9 +8,13 @@ real service (SESSIONCHANGE + automatic restart).
 
 ## Recommended path: `tolikopa-setup.exe`
 
-The panel's setup wizard (or the **Setup** page) produces a `tolikopa-setup.exe` specific to this
-installation. Run it on a domain-joined computer (with the Group Policy management tools
-installed) or on a domain controller:
+The panel's setup wizard (or the **Setup** page) offers `tolikopa-setup.zip`. It holds the
+generic `tolikopa-setup.exe` (the same file for every installation of a build) and
+`tolikopa.bundle`, which carries this installation's configuration, the agent files and the
+ingest token. **Extract the whole zip into one folder** — the exe reads `tolikopa.bundle` only from
+its own folder — and run the exe from there on a domain-joined computer (with the Group Policy
+management tools installed) or on a domain controller. Delete the folder afterwards: the bundle
+contains the ingest token.
 
 1. It asks for the panel's DNS name and IP (below), lists what it will do (with `-dry-run` it
    only lists) and asks for confirmation.
@@ -26,8 +30,9 @@ Owners), linking GPOs on the target OU, and adding DNS records/zones (Domain Adm
 The tool runs under the session of the person running it; no domain password is entered into the
 panel or the server. It is safe to run again.
 
-For a new agent version the panel offers `tolikopa-update.exe`: it only refreshes the files in
-NETLOGON; the DNS and certificate steps exist only in `tolikopa-setup.exe`.
+For a new agent version the panel offers `tolikopa-update.zip` (`tolikopa-update.exe` +
+`tolikopa.bundle`, extracted and run the same way): it only refreshes the files in NETLOGON; the
+DNS and certificate steps exist only in the setup run.
 
 ### DNS record
 
@@ -215,9 +220,30 @@ Removing/unlinking the GPO stops new installations.
 ## Antivirus / SmartScreen note
 
 An unsigned LocalSystem exe can produce false positives. Options: sign `tolikopa-agent.exe` with
-Authenticode (recommended), or add a Defender exclusion via GPO: `Computer Configuration →
-Policies → Administrative Templates → Windows Components → Microsoft Defender Antivirus →
-Exclusions` → path `C:\ProgramData\Tolikopa\tolikopa-agent.exe`.
+Authenticode (recommended), or add a Defender exclusion for the agent. The simplest way is the
+setup wizard's **Add a Microsoft Defender Exclusion** option, which puts the exclusion (the agent
+binary only, not the folder) into the same GPO; by hand: `Computer Configuration → Policies →
+Administrative Templates → Windows Components → Microsoft Defender Antivirus → Exclusions` → path
+`C:\ProgramData\Tolikopa\tolikopa-agent.exe`. Other antivirus products need their own exclusion.
+
+### Microsoft Defender quarantines the downloaded tool (`Trojan:Win32/Wacatac.B!ml`)
+
+`Wacatac.B!ml` is not a signature for a known piece of malware: the `!ml` suffix means a
+**machine-learning heuristic** judged the file suspicious. Unsigned, freshly built Go executables
+that touch the network or system configuration are a common false positive.
+
+- **Restore the file:** Windows Security → **Virus & threat protection → Protection history** →
+  open the entry → **Actions → Allow on device** (needs local admin rights). Then extract the
+  zip again if the exe was removed from the folder.
+- **Report the false positive:** submit `tolikopa-setup.exe` (or `tolikopa-update.exe`, or the
+  agent) at <https://www.microsoft.com/en-us/wdsi/filesubmission> as "incorrectly detected". This
+  works because the exe in the download is **byte-identical for every installation of a build**
+  (the installation-specific data lives in `tolikopa.bundle`), so a cleared hash covers every
+  download of that build. Earlier versions appended the bundle to the exe, which gave every
+  download a unique hash.
+- **SmartScreen** ("Windows protected your PC") is a reputation check for unsigned files:
+  **More info → Run anyway**. Reputation builds up per hash, which the stable exe now allows.
+- For the agent on the PCs, use the GPO Defender exclusion described above.
 
 ## Troubleshooting (silent install "does nothing")
 

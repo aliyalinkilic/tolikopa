@@ -27,8 +27,9 @@ import (
 // The server never holds domain credentials — there is no field, table or
 // endpoint for them, by decision. Rollout is done by tolikopa-setup.exe, which
 // an administrator downloads here and runs on their own domain PC under their
-// own session. The server's part is to make that one generic executable
-// installation-specific by appending a bundle (internal/bundle).
+// own session. The server's part is to ship that one generic executable,
+// unmodified, in a zip next to the installation-specific bundle
+// (internal/bundle).
 //
 // The ingest token leaves the server in exactly one place: inside config.json.
 // It is never logged, never put in a manifest and only ever shown masked.
@@ -40,8 +41,10 @@ const (
 	defaultGPOName = "Tolikopa Agent"
 
 	// Download names (the :name path parameter). A closed set.
-	dlSetupTool  = "tolikopa-setup.exe"
-	dlUpdateTool = "tolikopa-update.exe"
+	// The rollout tool is served only as a zip (the unmodified exe next to
+	// tolikopa.bundle); no executable with an appended archive is served.
+	dlSetupTool  = "tolikopa-setup.zip"
+	dlUpdateTool = "tolikopa-update.zip"
 	dlAgentWin   = "tolikopa-agent.exe"
 	dlAgentLinux = "tolikopa-agent-linux"
 	dlBootstrap  = "bootstrap.ps1"
@@ -258,7 +261,7 @@ func (a *API) GetSetup(c echo.Context) error {
 	}
 	out.Fleet.ByAgentVersion = []model.AgentVersionCount{}
 
-	// Windows machines only: tolikopa-update.exe and the NETLOGON payload update
+	// Windows machines only: tolikopa-update.zip and the NETLOGON payload update
 	// the Windows agent, so a Linux host (the server monitoring itself, updated
 	// separately) can neither be brought "current" by it nor should it raise the
 	// update banner.
@@ -427,11 +430,12 @@ func (a *API) DownloadSetupFile(c echo.Context) error {
 				}
 				lang = g.DefaultLang
 			}
-			mode := bundle.ModeSetup
+			mode, exeName := bundle.ModeSetup, "tolikopa-setup.exe"
 			if name == dlUpdateTool {
-				mode = bundle.ModeUpdate
+				mode, exeName = bundle.ModeUpdate, "tolikopa-update.exe"
 			}
-			data, err = a.buildTool(cfg, mode, lang)
+			data, err = a.buildTool(cfg, mode, lang, exeName)
+			ct = "application/zip"
 		}
 	default:
 		return apierr.NotFoundf("unknown download")
@@ -475,9 +479,10 @@ func (a *API) buildAgentConfig(cfg model.SetupConfig) ([]byte, error) {
 	return bundle.NewAgentConfig(cfg.ServerURL, a.cfg.IngestToken, ca).JSON()
 }
 
-// buildTool assembles tolikopa-setup.exe / tolikopa-update.exe: the generic
-// executable plus the bundle for this installation.
-func (a *API) buildTool(cfg model.SetupConfig, mode, lang string) ([]byte, error) {
+// buildTool assembles tolikopa-setup.zip / tolikopa-update.zip: the generic
+// executable, byte-identical to the artifact and named exeName, next to the
+// bundle (tolikopa.bundle) for this installation.
+func (a *API) buildTool(cfg model.SetupConfig, mode, lang, exeName string) ([]byte, error) {
 	// Artifacts first: without them this is a 503, whatever else is missing.
 	meta, err := a.arts.Meta()
 	if err != nil {
@@ -530,7 +535,7 @@ func (a *API) buildTool(cfg model.SetupConfig, mode, lang string) ([]byte, error
 		m.GPOName = cfg.GPOName
 		m.DefenderExclusion = cfg.DefenderExclusion
 	}
-	out, err := bundle.Assemble(exe, m, []bundle.Content{
+	archive, err := bundle.Archive(m, []bundle.Content{
 		{Name: bundle.FileAgent, Data: agent},
 		{Name: bundle.FileBootstrap, Data: bootstrap},
 		{Name: bundle.FileConfig, Data: conf},
@@ -541,5 +546,8 @@ func (a *API) buildTool(cfg model.SetupConfig, mode, lang string) ([]byte, error
 		// outside the API). Point the admin at the field instead of a 500.
 		return nil, setupIncomplete([]string{fe.Field})
 	}
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return bundle.Package(exeName, exe, archive)
 }

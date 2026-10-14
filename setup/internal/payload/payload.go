@@ -1,9 +1,10 @@
 // Package payload reads the deployment bundle the server attaches to this tool.
 //
-// The server serves one generic tolikopa-setup.exe with a zip archive appended to
-// it (archive/zip locates the central directory from the end of the file, so a zip
-// with an executable in front of it opens normally). The archive holds
-// manifest.json plus the files that go to the NETLOGON share. Nothing in it is
+// The panel serves a zip holding the generic tolikopa-setup.exe, unmodified, and
+// tolikopa.bundle next to it: a zip archive with manifest.json plus the files
+// that go to the NETLOGON share (see Locate). Older downloads appended the same
+// archive to the executable instead (archive/zip locates the central directory
+// from the end of the file, so that opens too); that is still accepted. Nothing in it is
 // executed by this tool: the files are copied, and the manifest is validated
 // field by field before any value is used.
 package payload
@@ -16,8 +17,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -201,12 +205,58 @@ type Bundle struct {
 	entries  map[string]*zip.File
 }
 
-// Open reads the archive at path (normally the running executable itself).
+// BundleFileName is the bundle the panel's download zip puts next to the
+// executable.
+const BundleFileName = "tolikopa.bundle"
+
+// ErrNotFound means there is neither a bundle appended to the executable nor a
+// tolikopa.bundle next to it.
+var ErrNotFound = errors.New("no deployment bundle")
+
+// Locate finds the bundle for the executable at exePath (already resolved by
+// the caller with os.Executable + filepath.EvalSymlinks), in this order:
+//
+//  1. a zip archive appended to the executable itself (the layout of older
+//     downloads, still accepted);
+//  2. tolikopa.bundle in the executable's own directory (the current download:
+//     a zip holding the unmodified exe next to the bundle).
+//
+// Nothing else is searched — not the working directory, not PATH — so a file
+// planted elsewhere can never be picked up. An appended archive that is present
+// but invalid is an error; it does not fall through to the sidecar file. It
+// returns the path the bundle was read from.
+func Locate(exePath string) (*Bundle, string, error) {
+	if zr, err := zip.OpenReader(exePath); err == nil {
+		b, err := fromZip(zr)
+		return b, exePath, err
+	}
+	side := filepath.Join(filepath.Dir(exePath), BundleFileName)
+	fi, err := os.Stat(side)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, side, ErrNotFound
+	}
+	if err != nil {
+		return nil, side, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, side, fmt.Errorf("%s is not a regular file", side)
+	}
+	b, err := Open(side)
+	return b, side, err
+}
+
+// Open reads the archive at path: a bundle file, or an executable with the
+// archive appended to it.
 func Open(path string) (*Bundle, error) {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return nil, fmt.Errorf("no deployment bundle found in %s: %w", path, err)
 	}
+	return fromZip(zr)
+}
+
+// fromZip reads and validates manifest.json; it takes ownership of zr.
+func fromZip(zr *zip.ReadCloser) (*Bundle, error) {
 	b := &Bundle{zr: zr, entries: map[string]*zip.File{}}
 	for _, f := range zr.File {
 		b.entries[f.Name] = f

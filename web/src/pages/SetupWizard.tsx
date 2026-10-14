@@ -556,7 +556,7 @@ function AuthedSteps({
               <h3 className="mb-2 text-[14px] font-semibold text-text">{t('setup.status.agentBuild')}</h3>
               <ArtifactInfo artifacts={state.artifacts} />
             </div>
-            <DownloadButton file="tolikopa-setup.exe" variant="primary" size="lg" disabled={!ready} className="w-full sm:w-auto">
+            <DownloadButton file="tolikopa-setup.zip" variant="primary" size="lg" disabled={!ready} className="w-full sm:w-auto">
               {t('setup.run.download')}
             </DownloadButton>
             <RunInstructions />

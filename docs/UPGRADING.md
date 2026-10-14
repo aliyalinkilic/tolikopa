@@ -23,7 +23,7 @@ sudo rm -rf /var/lib/gozcu /etc/gozcu /opt/gozcu
 
 Then clone the new repository and run `sudo ./setup.sh` (DEPLOYMENT.md). A reinstall generates
 **a new TLS certificate and a new ingest token**; old agents recognise neither. So on the Windows
-side, **remove the old GPO** and run the `tolikopa-setup.exe` downloaded from the panel again (the
+side, **remove the old GPO** and run `tolikopa-setup.exe` from a freshly downloaded `tolikopa-setup.zip` again (the
 migration in section 2 below works exactly the same with the new `config.json`). Machines appear
 in the panel as new records.
 
@@ -108,7 +108,8 @@ local task and folder. The unsent queue (`spool`) is not carried over; at most a
 measurements are lost. If the old folder's owner is not SYSTEM or Administrators, nothing is taken
 from it and the folder is left untouched.
 
-1. Download `tolikopa-setup.exe` from the panel and run it: it puts the new `tolikopa-agent.exe`,
+1. Download `tolikopa-setup.zip` from the panel, extract it into one folder and run
+   `tolikopa-setup.exe` from there: it puts the new `tolikopa-agent.exe`,
    `bootstrap.ps1` and the `config.json` **carrying the new certificate** under
    `\\<domain>\NETLOGON\Tolikopa\`, creates the panel's DNS record, and creates and links the new
    GPO (task name `TolikopaAgent`) together with the certificate trust (GPO-DEPLOYMENT.md). Target

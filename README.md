@@ -56,7 +56,7 @@ Admin browser  ◄── React panel (live WebSocket)
 - [`agent/`](agent/) — Go agent (Windows + Linux). A single static binary, no installer UI.
 - [`server/`](server/) — Go backend: ingest, REST/WebSocket API, alert engine.
 - [`web/`](web/) — Vite + React + TypeScript admin panel.
-- [`setup/`](setup/) — `tolikopa-setup.exe` / `tolikopa-update.exe`: domain rollout tool (Go).
+- [`setup/`](setup/) — `tolikopa-setup.exe` / `tolikopa-update.exe`: domain rollout tool (Go), downloaded from the panel as a zip with its bundle.
 - [`deploy/`](deploy/) — Docker Compose, Caddy, GPO scripts.
 - [`setup.sh`](setup.sh) — Ubuntu server installation and updates.
 - [`docs/`](docs/) — technical documentation (see below).
@@ -68,7 +68,8 @@ Admin browser  ◄── React panel (live WebSocket)
    It asks for the language (Turkish / English), the panel's DNS name, the server's IP and the first
    admin, then builds and starts everything.
 2. **First sign-in:** open `https://<server IP>`, check the certificate fingerprint, sign in.
-3. **Setup wizard:** enter the server address and the domain details, download `tolikopa-setup.exe`.
+3. **Setup wizard:** enter the server address and the domain details, download `tolikopa-setup.zip`
+   and extract it into one folder (the exe and `tolikopa.bundle` must stay together).
 4. **Domain:** run the tool on a domain-joined admin PC. It copies the agent to NETLOGON, creates
    the DNS record and the GPO, and makes the PCs trust the panel's certificate. No domain password
    ever reaches the panel.

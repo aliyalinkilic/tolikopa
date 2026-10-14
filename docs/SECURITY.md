@@ -403,8 +403,8 @@ the delete list and landed on the real key in the agent's case-insensitive JSON 
 2. The **agent** refuses to load a `config.json` in which one of the keys matches a kill-switch
    name under case folding but is **not byte-for-byte identical** to it.
 
-**Can:** **serve a malicious bundle** to an administrator. The downloaded `tolikopa-setup.exe` /
-`tolikopa-update.exe` comes from the server; someone who compromises the server can replace the exe
+**Can:** **serve a malicious bundle** to an administrator. The downloaded `tolikopa-setup.zip` /
+`tolikopa-update.zip` comes from the server; someone who compromises the server can replace the exe
 or the agent inside it, and if the administrator runs it with domain admin rights, the domain is
 taken over. This is the unavoidable residual risk of the "download software from the server and
 run it" model; mitigations:
@@ -420,9 +420,11 @@ run it" model; mitigations:
   be trusted either; the independent source of verification is the repository/build output.)
 - Downloads are open only to the `admin` role, served with `no-store`, and each one is logged
   (who, which file, from which IP).
-- Signing the binaries with Authenticode is the step that actually closes this risk (below); since
-  appending a bundle to the end of a signed exe breaks the signature, in a signed distribution the
-  bundle must be provided as a separate file (the tool can read a separate zip with `-bundle`).
+- The exe in the download is the build artifact **unmodified** (the bundle is the separate
+  `tolikopa.bundle`), so its SHA-256 is the same for every installation of a build and can be
+  compared against a published or self-built value.
+- Signing the binaries with Authenticode is the step that actually closes this risk (below). The
+  download layout already allows it: nothing is appended to the exe, so a signature would survive.
 
 **Ingest token.** It leaves the server only inside `config.json` (inside the bundle and as a
 standalone download); it does not enter the logs, the manifest, or the `GET /api/admin/setup` body
@@ -484,6 +486,10 @@ pinned end to end:
   and commit both files.
 - npm: `npm ci` installs exactly `package-lock.json` (integrity hashes) and fails if it does not
   match `package.json`.
+- Windows resources: `go run github.com/tc-hib/go-winres@<exact version>` turns the committed
+  `winres/winres.json` of the agent and the setup tool into a `.syso` before `go build`. It is a
+  build-time tool only (not a dependency of any shipped module), fetched by exact version through
+  the module proxy and verified against the checksum database; its output is deterministic.
 
 ## The server's own Linux agent
 
@@ -549,6 +555,31 @@ If possible, `tolikopa-agent.exe` should be signed with Authenticode — an unsi
 LocalSystem, reads the event log and talks to the network is a classic AV/SmartScreen false
 positive. Without a signature, a Defender exclusion / ASR exemption via GPO may be needed
 (GPO-DEPLOYMENT.md).
+
+### Antivirus and SmartScreen: why the download is a zip
+
+Earlier versions served `tolikopa-setup.exe` / `tolikopa-update.exe` with the installation's zip
+bundle **appended** to the executable. Microsoft Defender quarantined that download as
+`Trojan:Win32/Wacatac.B!ml` (a machine-learning verdict, a false positive), for two reasons in
+that design:
+
+1. **A PE with a zip overlay** is the classic dropper / self-extractor layout that ML models are
+   trained to distrust.
+2. **Every download had a unique hash** (manifest, `config.json` and the token differ per
+   installation and per download), so the file could never accumulate SmartScreen/Defender
+   reputation, and a false-positive submission to Microsoft would only ever have cleared that one
+   download.
+
+Now the download is `tolikopa-setup.zip` / `tolikopa-update.zip`: the exe **exactly as built**
+(byte-identical across installations of a build), `tolikopa.bundle` (a plain zip — manifest + files,
+validated exactly as before) and a `README.txt`. The tool reads the bundle only from its own
+folder (`os.Executable` + `EvalSymlinks`), never from the working directory, so a file planted
+where the admin happens to open a console is not picked up. A bundle appended to the exe is still
+accepted for old downloads. In addition, the setup tool and the agent carry a Windows **version
+resource** and an **application manifest** (`asInvoker`: the agent runs as a service, the setup
+tool uses the admin's domain rights, not local elevation), generated at image build time with a
+pinned `go-winres` (server/Dockerfile). Troubleshooting a quarantine: GPO-DEPLOYMENT.md,
+"Microsoft Defender quarantines the downloaded tool".
 
 ## Hardening checklist
 

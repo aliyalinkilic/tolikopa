@@ -223,7 +223,7 @@ Routes are language-independent short English names; the old Turkish paths (`/ci
   sidebar-less flow that replaces the login screen; language and theme picker from the first
   screen on. Steps: Welcome → Admin Account (setup code; then optional 2FA) → Server Address →
   Domain (+ Required Rights panel) → Download and Run (readiness check, SHA-256,
-  `tolikopa-setup.exe`) → First PC (polls every few seconds). Progress bar on top; "Step n of 6" on
+  `tolikopa-setup.zip`) → First PC (polls every few seconds). Progress bar on top; "Step n of 6" on
   narrow screens. The step is derived from server state (continues where it left off on reload).
   The panel **does not ask** for the domain password.
 - **Sign In (`/login`):** brand panel + form; language and theme picker at the top right. If 2FA is
@@ -243,7 +243,7 @@ Routes are language-independent short English names; the old Turkish paths (`/ci
 - **Profile (`/profile`):** account information, password change, two-step verification, personal
   preferences, session + version.
 - **Setup (`/setup`, administrators only):** status (server address, masked ingest token, agent
-  build, fleet by version) → Agent Update card (`tolikopa-update.exe`) → server address and domain
+  build, fleet by version) → Agent Update card (`tolikopa-update.zip`) → server address and domain
   forms + Required Rights → re-download the setup tool → collapsed "Advanced" (individual files,
   manual GPO steps; paths are built from the configured FQDN) → Maintenance (uninstall, rerun the
   wizard — behind a ConfirmDialog).

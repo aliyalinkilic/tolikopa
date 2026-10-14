@@ -29,7 +29,8 @@ Tolikopa has three parts:
 2. **The agent** (`tolikopa-agent.exe`): a small Windows service on every domain PC. It sends
    system-health and usage metrics to the server. You never install it by hand: a Group Policy
    Object (GPO) installs it.
-3. **The setup tool** (`tolikopa-setup.exe`): you download it from the panel and run it once on a
+3. **The setup tool** (`tolikopa-setup.exe`): you download it from the panel (in `tolikopa-setup.zip`,
+   next to its `tolikopa.bundle`) and run it once on a
    domain-joined admin PC. It copies the agent to `NETLOGON`, adds the panel's DNS record, and
    creates the GPO that installs the agent and makes the PCs trust the panel's certificate.
 
@@ -361,7 +362,7 @@ Example (shortened):
 
 Next steps:
   1. Open the panel. The browser warns about the certificate: continue if the fingerprint matches the one above.
-  2. In the setup wizard enter the domain details and download tolikopa-setup.exe.
+  2. In the setup wizard enter the domain details, download tolikopa-setup.zip and extract it into one folder.
   3. Run it on a domain-joined admin PC: it deploys the agent, creates the tolikopa.corp.local DNS record and makes the PCs trust this certificate through the GPO.
 
   Update:  cd /home/admin/tolikopa && git pull && sudo ./setup.sh
@@ -439,11 +440,13 @@ requirements from 2.5.
    If an item shows **Missing**, the list explains the fix. Click **Refresh** after fixing it.
 2. Under **Agent Build**, note the **SHA-256** of the agent. The setup tool prints the same hash
    in Step 6; compare the two.
-3. Click **Download tolikopa-setup.exe**.
+3. Click **Download tolikopa-setup.zip**.
 
-`tolikopa-setup.exe` carries your configuration, the agent files and the **ingest token**. Treat
-the file as sensitive: anyone who has it can send fake reports to your server. Do not e-mail it
-or leave it on a shared drive. Delete it when you are done; you can download it again any time.
+The zip holds three files: `tolikopa-setup.exe`, `tolikopa.bundle` and `README.txt`. The exe is
+the same for every installation of a build; `tolikopa.bundle` carries your configuration, the
+agent files and the **ingest token**. Treat the zip and the bundle as sensitive: anyone who has
+them can send fake reports to your server. Do not e-mail them or leave them on a shared drive.
+Delete them when you are done; you can download the zip again any time.
 
 The console language of the tool follows the panel's language at the moment you download it.
 
@@ -456,16 +459,20 @@ Step 7.
 
 ### 8.1 Start the tool
 
-1. Copy `tolikopa-setup.exe` to the admin PC from 2.5.
-2. **SmartScreen.** The file is not signed, so Windows may show "Windows protected your PC". Click
-   **More info** → **Run anyway**.
+1. Copy `tolikopa-setup.zip` to the admin PC from 2.5 and **extract the whole zip into one
+   folder** (right-click → **Extract All…**). Run the exe from that folder: it reads
+   `tolikopa.bundle` only from its own folder, so the two files must stay together. Started
+   without its bundle, the tool says so and stops.
+2. **SmartScreen.** The exe is not signed, so Windows may show "Windows protected your PC". Click
+   **More info** → **Run anyway**. If Microsoft Defender quarantines the exe (for example as
+   `Trojan:Win32/Wacatac.B!ml`), see [Troubleshooting](#13-troubleshooting).
 3. **Account.** The tool works with the rights of the Windows account that runs it. If you are
    not signed in as a domain admin, Shift + right-click the file → **Run as different user**, and
    enter the domain admin account.
 
 ### 8.2 Dry run first
 
-Open PowerShell in the folder that contains the file and run:
+Open PowerShell in the folder you extracted the zip into and run:
 
 ```powershell
 .\tolikopa-setup.exe -dry-run
@@ -700,8 +707,9 @@ images, restarts the services and refreshes the Linux agent. Database migrations
 automatically.
 
 If the update contains a new agent build, the **Setup** page shows **Agent Update** with
-**Download tolikopa-update.exe**. Run that tool on a domain-joined PC with an account that can
-write to `NETLOGON`. It only replaces the files on `NETLOGON`; the GPO, DNS and certificate are
+**Download tolikopa-update.zip**. Extract the whole zip into one folder (`tolikopa-update.exe` and
+`tolikopa.bundle` must stay together) and run the exe on a domain-joined PC with an account that
+can write to `NETLOGON`. It only replaces the files on `NETLOGON`; the GPO, DNS and certificate are
 not touched. Each PC updates itself at its next start or daily run.
 
 After an update, reload the panel with a hard refresh (Ctrl+F5) so the browser loads the new
@@ -752,6 +760,8 @@ The archive contains secrets: store it securely. Restore notes are in
 | Setup tool: `The DNS name ... already points elsewhere (...)` | A record with that name points to another address, or a CNAME/AAAA exists | Delete the old record, or choose another name the certificate covers, or run with `-skip-dns` and create the record yourself |
 | Setup tool: `The Group Policy PowerShell module is missing.` | RSAT Group Policy tools are not installed | Elevated PowerShell: `Add-WindowsCapability -Online -Name Rsat.GroupPolicy.Management.Tools~~~~0.0.1.0` (Windows Server: `Install-WindowsFeature GPMC`). Or run the tool on a domain controller |
 | Setup tool: `The DNS Server PowerShell module is missing.` | RSAT DNS tools are not installed | `Add-WindowsCapability -Online -Name Rsat.Dns.Tools~~~~0.0.1.0` (Windows Server: `Install-WindowsFeature RSAT-DNS-Server`). Or run with `-skip-dns` |
+| Setup tool: `tolikopa.bundle was not found next to this program.` | The exe was started from inside the zip, or copied without `tolikopa.bundle` | Extract the **whole** zip into one folder (right-click → **Extract All…**) and run the exe from that folder |
+| Microsoft Defender removes or blocks the exe: `Trojan:Win32/Wacatac.B!ml` | A machine-learning heuristic (`!ml`) flags the unsigned exe — a false positive | Windows Security → **Virus & threat protection → Protection history** → the entry → **Actions → Allow on device**, then extract the zip again. Report it at https://www.microsoft.com/en-us/wdsi/filesubmission as incorrectly detected: the exe is byte-identical for every installation of a build, so the fix reaches every download. Details: [GPO-DEPLOYMENT.md](GPO-DEPLOYMENT.md#microsoft-defender-quarantines-the-downloaded-tool-trojanwin32wacatacbml) |
 | Setup tool: `This computer is joined to ..., but the bundle was prepared for ...` | The **Domain (FQDN)** in the wizard is wrong | Fix it on the Domain step, save, download the tool again |
 | Setup tool: `A GPO named "..." already exists and was not created by this tool.` | Name clash with an existing GPO | Choose another **GPO Name**, save, download the tool again |
 | Setup tool: `The domain refused the change.` | The account lacks a right | Check the rights in 2.5, or run as a domain admin (Shift + right-click → **Run as different user**) |
@@ -767,7 +777,8 @@ PC-side checks are in [GPO-DEPLOYMENT.md](GPO-DEPLOYMENT.md#troubleshooting-sile
 
 ### 14.1 Domain side
 
-On the admin PC, run the same `tolikopa-setup.exe` (not `tolikopa-update.exe`):
+On the admin PC, run `tolikopa-setup.exe` from an extracted `tolikopa-setup.zip` (not the
+update zip — only the setup bundle names the GPO):
 
 ```powershell
 .\tolikopa-setup.exe -remove

@@ -46,7 +46,7 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # The panel's TLS CERTIFICATE only (never the key): it goes into the agents'
-      # config.json and into tolikopa-setup.exe.
+      # config.json and into the setup tool's bundle (tolikopa-setup.zip).
       TLS_CERT_FILE: /tls/tolikopa.crt
       SERVER_HOST: ${SERVER_HOST:-localhost}
       OFFLINE_WARN_SEC: ${OFFLINE_WARN_SEC:-300}

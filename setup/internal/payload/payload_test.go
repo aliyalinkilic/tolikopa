@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,10 +77,9 @@ func TestPaths(t *testing.T) {
 	}
 }
 
-// The server appends the zip to the executable; the bundle must open from a file
-// that has arbitrary bytes in front of the archive.
-func TestOpenWithPrefix(t *testing.T) {
-	m := validManifest()
+// bundleZip returns a bundle archive for m with the three standard files.
+func bundleZip(t *testing.T, m Manifest) []byte {
+	t.Helper()
 	var zbuf bytes.Buffer
 	zw := zip.NewWriter(&zbuf)
 	mj, _ := json.Marshal(m)
@@ -90,10 +90,123 @@ func TestOpenWithPrefix(t *testing.T) {
 		w.Write(body)
 	}
 	zw.Close()
+	return zbuf.Bytes()
+}
 
+var fakeExe = []byte("MZ" + strings.Repeat("\x00binary", 5000))
+
+func writeFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Lookup order: appended to the executable first, then tolikopa.bundle in the
+// executable's directory, and nowhere else.
+func TestLocate(t *testing.T) {
+	appended := validManifest()
+	appended.GPOName = "Appended"
+	sidecar := validManifest()
+	sidecar.GPOName = "Sidecar"
+
+	t.Run("appended wins over the sidecar", func(t *testing.T) {
+		dir := t.TempDir()
+		exe := filepath.Join(dir, "tolikopa-setup.exe")
+		writeFile(t, exe, append(append([]byte{}, fakeExe...), bundleZip(t, appended)...))
+		writeFile(t, filepath.Join(dir, BundleFileName), bundleZip(t, sidecar))
+		b, from, err := Locate(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer b.Close()
+		if from != exe || b.Manifest.GPOName != "Appended" {
+			t.Errorf("read %s (%s), want the appended bundle", from, b.Manifest.GPOName)
+		}
+	})
+
+	t.Run("sidecar next to a plain executable", func(t *testing.T) {
+		dir := t.TempDir()
+		exe := filepath.Join(dir, "tolikopa-update.exe")
+		writeFile(t, exe, fakeExe)
+		writeFile(t, filepath.Join(dir, BundleFileName), bundleZip(t, sidecar))
+		b, from, err := Locate(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer b.Close()
+		if from != filepath.Join(dir, BundleFileName) || b.Manifest.GPOName != "Sidecar" {
+			t.Errorf("read %s (%s), want the sidecar", from, b.Manifest.GPOName)
+		}
+		if data, err := b.Read(b.Manifest.Files[0]); err != nil || string(data) != "a" {
+			t.Errorf("Read = %q, %v", data, err)
+		}
+	})
+
+	t.Run("working directory is never searched", func(t *testing.T) {
+		exeDir, cwd := t.TempDir(), t.TempDir()
+		exe := filepath.Join(exeDir, "tolikopa-setup.exe")
+		writeFile(t, exe, fakeExe)
+		writeFile(t, filepath.Join(cwd, BundleFileName), bundleZip(t, sidecar))
+		t.Chdir(cwd)
+		b, _, err := Locate(exe)
+		if !errors.Is(err, ErrNotFound) {
+			if b != nil {
+				b.Close()
+			}
+			t.Fatalf("got %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("invalid appended bundle does not fall through", func(t *testing.T) {
+		dir := t.TempDir()
+		bad := validManifest()
+		bad.GPOName = "$(calc)"
+		exe := filepath.Join(dir, "tolikopa-setup.exe")
+		writeFile(t, exe, append(append([]byte{}, fakeExe...), bundleZip(t, bad)...))
+		writeFile(t, filepath.Join(dir, BundleFileName), bundleZip(t, sidecar))
+		if b, _, err := Locate(exe); err == nil || errors.Is(err, ErrNotFound) {
+			if b != nil {
+				b.Close()
+			}
+			t.Fatalf("got %v, want a validation error", err)
+		}
+	})
+
+	t.Run("invalid sidecar is rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		bad := validManifest()
+		bad.DomainFQDN = "corp.example.com; calc"
+		exe := filepath.Join(dir, "tolikopa-setup.exe")
+		writeFile(t, exe, fakeExe)
+		writeFile(t, filepath.Join(dir, BundleFileName), bundleZip(t, bad))
+		if b, _, err := Locate(exe); err == nil || errors.Is(err, ErrNotFound) {
+			if b != nil {
+				b.Close()
+			}
+			t.Fatalf("got %v, want a validation error", err)
+		}
+	})
+
+	t.Run("sidecar that is a directory", func(t *testing.T) {
+		dir := t.TempDir()
+		exe := filepath.Join(dir, "tolikopa-setup.exe")
+		writeFile(t, exe, fakeExe)
+		if err := os.Mkdir(filepath.Join(dir, BundleFileName), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := Locate(exe); err == nil || errors.Is(err, ErrNotFound) {
+			t.Fatalf("got %v, want an error", err)
+		}
+	})
+}
+
+// Older downloads appended the zip to the executable; the bundle must open from
+// a file that has arbitrary bytes in front of the archive.
+func TestOpenWithPrefix(t *testing.T) {
+	m := validManifest()
 	path := filepath.Join(t.TempDir(), "tolikopa-setup.exe")
-	prefix := []byte("MZ" + strings.Repeat("\x00binary", 5000))
-	if err := os.WriteFile(path, append(prefix, zbuf.Bytes()...), 0o600); err != nil {
+	if err := os.WriteFile(path, append(append([]byte{}, fakeExe...), bundleZip(t, m)...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	b, err := Open(path)

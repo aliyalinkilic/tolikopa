@@ -61,9 +61,28 @@ func strictManifest(t *testing.T, raw []byte) Manifest {
 	return m
 }
 
-// End to end: fake artifacts → assembled download → written to disk with the
-// exe in front → re-opened with archive/zip exactly as the tool opens itself.
-func TestAssembleRoundTrip(t *testing.T) {
+// readZip returns every entry of a zip archive held in memory.
+func readZip(t *testing.T, raw []byte) map[string][]byte {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatalf("not a zip archive: %v", err)
+	}
+	got := map[string][]byte{}
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open %s: %v", f.Name, err)
+		}
+		got[f.Name], _ = io.ReadAll(rc)
+		rc.Close()
+	}
+	return got
+}
+
+// End to end: fake artifacts → download zip → the bundle inside it written to
+// disk as tolikopa.bundle → re-opened with archive/zip exactly as the tool does.
+func TestArchiveRoundTrip(t *testing.T) {
 	st := fakeArtifacts(t)
 	meta, err := st.Meta()
 	if err != nil {
@@ -86,16 +105,35 @@ func TestAssembleRoundTrip(t *testing.T) {
 		if mode == ModeSetup {
 			m.TargetDN, m.GPOName, m.DefenderExclusion = "OU=Workstations,DC=corp,DC=example,DC=com", "Tolikopa Agent", true
 		}
-		out, err := Assemble(exe, m, contents)
+		archive, err := Archive(m, contents)
 		if err != nil {
-			t.Fatalf("%s: Assemble: %v", mode, err)
+			t.Fatalf("%s: Archive: %v", mode, err)
 		}
-		if !bytes.HasPrefix(out, exe) {
-			t.Fatalf("%s: the executable is not the unmodified prefix of the download", mode)
+		exeName := "tolikopa-" + mode + ".exe"
+		out, err := Package(exeName, exe, archive)
+		if err != nil {
+			t.Fatalf("%s: Package: %v", mode, err)
+		}
+		dl := readZip(t, out)
+		if len(dl) != 3 {
+			t.Errorf("%s: download has %d entries, want exe + bundle + README", mode, len(dl))
+		}
+		if !bytes.Equal(dl[exeName], exe) {
+			t.Fatalf("%s: %s in the download is not the unmodified artifact", mode, exeName)
+		}
+		if !bytes.Equal(dl[BundleName], archive) {
+			t.Fatalf("%s: %s differs from the archive", mode, BundleName)
+		}
+		if !bytes.Contains(dl[ReadmeName], []byte("tolikopa.bundle")) {
+			t.Errorf("%s: README does not explain the bundle", mode)
+		}
+		// The token lives in the bundle only, never in the executable.
+		if bytes.Contains(dl[exeName], []byte(testToken)) {
+			t.Errorf("%s: the executable carries the ingest token", mode)
 		}
 
-		path := filepath.Join(t.TempDir(), "tolikopa-"+mode+".exe")
-		if err := os.WriteFile(path, out, 0o600); err != nil {
+		path := filepath.Join(t.TempDir(), BundleName)
+		if err := os.WriteFile(path, dl[BundleName], 0o600); err != nil {
 			t.Fatal(err)
 		}
 		zr, err := zip.OpenReader(path)
@@ -156,19 +194,57 @@ func TestAssembleRoundTrip(t *testing.T) {
 	}
 }
 
-func TestAssembleRefusesInvalidManifest(t *testing.T) {
+// The executable in the download is the same for every installation: two
+// different configurations change only tolikopa.bundle. That hash stability is
+// what lets SmartScreen/Defender reputation (and a false-positive submission)
+// apply to every download of a build.
+func TestPackageExeIsInstallationIndependent(t *testing.T) {
+	exe := []byte("MZ" + strings.Repeat("\x00tool", 1000))
+	contents := []Content{{FileAgent, []byte("a")}, {FileBootstrap, []byte("b")}, {FileConfig, []byte("c")}}
+	var exes, bundles [][]byte
+	for _, fqdn := range []string{"corp.example.com", "other.example.org"} {
+		m := validManifest()
+		m.DomainFQDN, m.TargetDN = fqdn, ""
+		archive, err := Archive(m, contents)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := Package("tolikopa-setup.exe", exe, archive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dl := readZip(t, out)
+		exes = append(exes, dl["tolikopa-setup.exe"])
+		bundles = append(bundles, dl[BundleName])
+	}
+	if artifacts.SumBytes(exes[0]) != artifacts.SumBytes(exe) || artifacts.SumBytes(exes[1]) != artifacts.SumBytes(exe) {
+		t.Error("the executable in the download differs from the artifact")
+	}
+	if bytes.Equal(bundles[0], bundles[1]) {
+		t.Error("two installations got the same bundle")
+	}
+	// The bundle is a plain zip, not an executable with an overlay.
+	if bytes.HasPrefix(bundles[0], []byte("MZ")) {
+		t.Error("the bundle starts with an executable")
+	}
+}
+
+func TestArchiveRefusesInvalidManifest(t *testing.T) {
 	m := validManifest()
 	m.DomainFQDN = "corp.example.com; calc"
-	_, err := Assemble([]byte("MZ"), m, []Content{{FileAgent, []byte("a")}, {FileBootstrap, []byte("b")}, {FileConfig, []byte("c")}})
+	_, err := Archive(m, []Content{{FileAgent, []byte("a")}, {FileBootstrap, []byte("b")}, {FileConfig, []byte("c")}})
 	var fe *FieldError
 	if !errors.As(err, &fe) || fe.Field != "domain_fqdn" {
 		t.Errorf("got %v, want a domain_fqdn FieldError", err)
 	}
-	if _, err := Assemble(nil, validManifest(), nil); err == nil {
+	if _, err := Package("tolikopa-setup.exe", nil, []byte("PK")); err == nil {
 		t.Error("empty executable accepted")
 	}
+	if _, err := Package("tolikopa-setup.exe", []byte("MZ"), nil); err == nil {
+		t.Error("empty bundle accepted")
+	}
 	// A file outside the tool's allowlist can never be bundled.
-	if _, err := Assemble([]byte("MZ"), validManifest(), []Content{{"payload.dll", []byte("x")}}); err == nil {
+	if _, err := Archive(validManifest(), []Content{{"payload.dll", []byte("x")}}); err == nil {
 		t.Error("unexpected file name accepted")
 	}
 }

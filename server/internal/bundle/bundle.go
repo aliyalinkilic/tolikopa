@@ -1,5 +1,6 @@
 // Package bundle builds the installation-specific downloads of the rollout
-// tools: one generic tolikopa-setup.exe with a zip archive appended to it.
+// tools: a zip holding the unmodified, generic tolikopa-setup.exe next to
+// tolikopa.bundle, the installation-specific archive (manifest + files).
 //
 // The contract is owned by the setup tool (setup/internal/payload, a separate Go
 // module that this one must not import). Manifest and the validation below are a
@@ -22,6 +23,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/aliyalinkilic/tolikopa/server/internal/artifacts"
 )
@@ -72,6 +74,7 @@ var (
 	reNetBIOS = regexp.MustCompile(`^[A-Za-z0-9-]{1,15}$`)
 	reGPOName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _-]{0,62}$`)
 	reSHA     = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	reVersion = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$`)
 	reDN      = regexp.MustCompile(`^(OU|DC|CN)=[\p{L}\p{N} ._&()-]+(,(OU|DC|CN)=[\p{L}\p{N} ._&()-]+)*$`)
 
 	reHost = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
@@ -194,6 +197,9 @@ func (m *Manifest) Validate() error {
 			return fieldErr("target_dn", "invalid or outside the domain")
 		}
 	}
+	if m.AgentVersion != "" && !reVersion.MatchString(m.AgentVersion) {
+		return fieldErr("agent_version", "invalid version")
+	}
 	if len(m.Files) == 0 {
 		return fieldErr("files", "no files")
 	}
@@ -223,17 +229,11 @@ type Content struct {
 	Data []byte
 }
 
-// Assemble returns exe followed by a zip archive holding manifest.json and the
-// given files. m.Files is filled in from the contents (name + SHA-256), then the
-// manifest is validated — an invalid one is never emitted.
-//
-// The archive's offsets are written relative to the start of the combined file
-// (zip.Writer.SetOffset), which is the canonical self-extractor layout: both
-// archive/zip and ordinary zip tools open the result.
-func Assemble(exe []byte, m Manifest, files []Content) ([]byte, error) {
-	if len(exe) == 0 {
-		return nil, errors.New("bundle: empty executable")
-	}
+// Archive returns the bundle: a standalone zip archive holding manifest.json and
+// the given files (served inside the download as tolikopa.bundle). m.Files is
+// filled in from the contents (name + SHA-256), then the manifest is validated —
+// an invalid one is never emitted.
+func Archive(m Manifest, files []Content) ([]byte, error) {
 	m.Files = make([]File, 0, len(files))
 	for _, f := range files {
 		m.Files = append(m.Files, File{Name: f.Name, SHA256: artifacts.SumBytes(f.Data)})
@@ -245,14 +245,78 @@ func Assemble(exe []byte, m Manifest, files []Content) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return writeZip(append([]Content{{Name: manifestName, Data: mj}}, files...))
+}
 
+// Names inside a download zip.
+const (
+	BundleName = "tolikopa.bundle" // the setup tool looks for exactly this name next to itself
+	ReadmeName = "README.txt"
+)
+
+// Readme is the README.txt of every download zip (CRLF: it is read in Notepad).
+var Readme = []byte(strings.ReplaceAll(`ToliKOPA domain setup tool
+==========================
+
+1. Extract ALL files of this zip into the same folder.
+2. Run the .exe from that folder. It reads its configuration from
+   tolikopa.bundle, which must stay next to it.
+
+tolikopa.bundle carries this installation's configuration and the agents'
+ingest token. Keep it private and delete it (and this folder) after use.
+
+The .exe is identical for every installation of the same ToliKOPA build;
+only tolikopa.bundle is specific to yours.
+
+--------------------------------------------------------------------------
+
+ToliKOPA etki alanı kurulum aracı
+=================================
+
+1. Bu zip'teki TÜM dosyaları aynı klasöre çıkarın.
+2. .exe dosyasını o klasörden çalıştırın. Yapılandırmasını yanındaki
+   tolikopa.bundle dosyasından okur; bu dosya exe ile aynı klasörde kalmalıdır.
+
+tolikopa.bundle bu kurulumun yapılandırmasını ve ajanların ingest token'ını
+taşır. Kimseyle paylaşmayın; işiniz bittikten sonra (klasörle birlikte) silin.
+
+.exe dosyası aynı ToliKOPA derlemesinin tüm kurulumlarında aynıdır; yalnızca
+tolikopa.bundle sizin kurulumunuza özeldir.
+`, "\n", "\r\n"))
+
+// Package returns the download zip: the setup tool executable exactly as built
+// (byte for byte, so its hash is that of the artifact for every
+// installation), the bundle archive and README.txt. exeName is the name the
+// executable gets inside the zip (tolikopa-setup.exe or tolikopa-update.exe).
+//
+// Nothing is appended to the executable any more: a PE with a zip overlay is
+// the classic dropper layout and per-download hashes can never build reputation
+// with SmartScreen or Microsoft Defender.
+func Package(exeName string, exe, archive []byte) ([]byte, error) {
+	if len(exe) == 0 {
+		return nil, errors.New("bundle: empty executable")
+	}
+	if len(archive) == 0 {
+		return nil, errors.New("bundle: empty bundle")
+	}
+	return writeZip([]Content{
+		{Name: exeName, Data: exe},
+		{Name: BundleName, Data: archive},
+		{Name: ReadmeName, Data: Readme},
+	})
+}
+
+func writeZip(files []Content) ([]byte, error) {
+	size := 1024
+	for _, f := range files {
+		size += len(f.Data)
+	}
 	var buf bytes.Buffer
-	buf.Grow(len(exe) + len(mj) + 1024)
-	buf.Write(exe)
+	buf.Grow(size)
 	zw := zip.NewWriter(&buf)
-	zw.SetOffset(int64(len(exe)))
-	for _, f := range append([]Content{{Name: manifestName, Data: mj}}, files...) {
-		w, err := zw.CreateHeader(&zip.FileHeader{Name: f.Name, Method: zip.Deflate})
+	now := time.Now()
+	for _, f := range files {
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: f.Name, Method: zip.Deflate, Modified: now})
 		if err != nil {
 			return nil, fmt.Errorf("bundle: %s: %w", f.Name, err)
 		}

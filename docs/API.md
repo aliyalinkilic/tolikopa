@@ -836,7 +836,7 @@ the admin downloads from the panel and runs on **their own** domain PC, under **
 - `artifacts.agent_sha256` is the SHA-256 of the served `tolikopa-agent.exe` (computed on the server
   at startup / when the file changes). The setup tool prints the same value in its plan; the admin
   compares the two (optionally: `Get-FileHash` on the file copied to the share).
-- `fleet`: non-archived **Windows** machines (`kind <> 'linux'` — `tolikopa-update.exe` cannot
+- `fleet`: non-archived **Windows** machines (`kind <> 'linux'` — `tolikopa-update.zip` cannot
   update the Linux agent, so it neither counts as outdated nor raises `update_available`), by `machine.agent_version` (`version: ""` = did not report a
   version). `current` = those on the same version as `artifacts.agent_version` (a leading `v` is
   ignored); `outdated` = the rest. If `artifacts` is absent, both are `0`.
@@ -864,13 +864,16 @@ machine to have reported. `reopen` clears the flag (settings are not deleted).
 
 ### 11.3 Downloads — `GET /api/admin/setup/download/{name}`
 
-Response headers: `Content-Disposition: attachment; filename="<name>"`, `Cache-Control: no-store`.
+Response headers: `Content-Disposition: attachment; filename="<name>"`, `Cache-Control: no-store`;
+`Content-Type: application/zip` for the two tool zips. The names form a closed set: the former
+`tolikopa-setup.exe` / `tolikopa-update.exe` downloads (an exe with the bundle appended) no longer
+exist and answer `404`.
 Every download is written to the server log (who, which file, client IP).
 
 | `name` | Content | Requirements |
 |--------|--------|-----------|
-| `tolikopa-setup.exe` | setup tool + **setup** bundle | artifacts, `server_url`, `root_ca`, `domain` |
-| `tolikopa-update.exe` | the **same** exe + **update** bundle (does not touch the GPO) | same |
+| `tolikopa-setup.zip` | `tolikopa-setup.exe` (unmodified) + `tolikopa.bundle` (**setup**) + `README.txt` | artifacts, `server_url`, `root_ca`, `domain` |
+| `tolikopa-update.zip` | the **same** exe bytes as `tolikopa-update.exe` + `tolikopa.bundle` (**update**, does not touch the GPO) + `README.txt` | same |
 | `tolikopa-agent.exe` | Windows agent (raw) | artifacts |
 | `tolikopa-agent-linux` | Linux agent (raw) | artifacts |
 | `bootstrap.ps1` | GPO startup script (raw) | artifacts |
@@ -884,10 +887,17 @@ field does not satisfy the tool's rules: `missing` carries that field's name), `
 For the two tools, `?lang=tr|en` goes into the manifest's `lang` field (the tool's console
 language); if not given, `default_lang` is used.
 
-**Bundle format.** The server carries a single, generic `tolikopa-setup.exe` and makes it
-installation-specific at download time by **appending a zip to the end of** the exe bytes (the zip
-central directory is located from the end of the file).
-Zip: `manifest.json` + `tolikopa-agent.exe` + `bootstrap.ps1` + `config.json`.
+**Download and bundle format.** The server carries a single, generic `tolikopa-setup.exe` (with a
+Windows version resource and an `asInvoker` manifest, added at image build time). The download is
+a zip holding that executable **byte for byte unmodified** — so its SHA-256 is the same for every
+installation of a build — next to `tolikopa.bundle`, the installation-specific part, and a short
+bilingual `README.txt`. `tolikopa.bundle` is itself a plain zip:
+`manifest.json` + `tolikopa-agent.exe` + `bootstrap.ps1` + `config.json`.
+
+The tool, started without `-bundle`, looks for its bundle (1) appended to its own executable
+(the layout of older downloads, still accepted) and otherwise (2) as `tolikopa.bundle` in the
+**executable's own directory** (`os.Executable` + `EvalSymlinks`) — never in the working directory
+or anywhere else. Why the exe is no longer modified: docs/SECURITY.md, "Antivirus and SmartScreen".
 
 ```jsonc
 // manifest.json — the tool decodes with DisallowUnknownFields; the fields are EXACTLY these

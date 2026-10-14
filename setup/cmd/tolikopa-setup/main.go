@@ -1,10 +1,12 @@
 // Command tolikopa-setup deploys the Tolikopa agent to an Active Directory domain.
 //
 // An IT administrator downloads it from the panel and runs it on their own
-// domain-joined PC (or on a domain controller). The download carries a bundle —
-// tolikopa-agent.exe, bootstrap.ps1, config.json and a manifest — appended to this
-// executable. The same binary served as tolikopa-update.exe carries an "update"
-// bundle, which only refreshes the files on the share.
+// domain-joined PC (or on a domain controller). The download is a zip holding
+// this executable, unmodified, and tolikopa.bundle — tolikopa-agent.exe,
+// bootstrap.ps1, config.json and a manifest — which must sit next to it (a
+// bundle appended to the executable, as older downloads had, is still read).
+// The same binary, shipped as tolikopa-update.exe in tolikopa-update.zip, comes
+// with an "update" bundle, which only refreshes the files on the share.
 //
 // A setup run also gives the panel its DNS name in the domain's DNS and makes
 // domain PCs trust the panel's self-signed certificate through the same GPO.
@@ -16,11 +18,13 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -57,7 +61,7 @@ func main() {
 	flag.BoolVar(&o.dryRun, "dry-run", false, "show what would be done, change nothing")
 	flag.BoolVar(&o.yes, "yes", false, "do not ask anything; use the defaults")
 	flag.BoolVar(&o.remove, "remove", false, "remove the GPO and the NETLOGON folder")
-	flag.StringVar(&o.bundlePath, "bundle", "", "read the deployment bundle from this zip instead of the executable itself")
+	flag.StringVar(&o.bundlePath, "bundle", "", "read the deployment bundle from this file instead of tolikopa.bundle next to the executable")
 	flag.StringVar(&o.lang, "lang", "", "console language: tr or en")
 	flag.StringVar(&o.dnsName, "dns-name", "", "the panel's DNS name (default: the name in its certificate)")
 	flag.StringVar(&o.dnsIP, "dns-ip", "", "the address the DNS name points to (default: the address in the certificate)")
@@ -85,15 +89,36 @@ func run(o options) int {
 	if o.lang == "tr" || o.lang == "en" {
 		lang = o.lang
 	}
-	if o.bundlePath == "" {
-		exe, err := os.Executable()
+	var (
+		b   *payload.Bundle
+		err error
+	)
+	if o.bundlePath != "" {
+		b, err = payload.Open(o.bundlePath)
+	} else {
+		// Appended to this executable (older downloads), else tolikopa.bundle in
+		// the executable's own directory — never the working directory.
+		var exe string
+		if exe, err = os.Executable(); err == nil {
+			exe, err = filepath.EvalSymlinks(exe)
+		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		o.bundlePath = exe
+		b, _, err = payload.Locate(exe)
+		if errors.Is(err, payload.ErrNotFound) {
+			// The manifest's language is unknown here: without -lang, say it in both.
+			if o.lang != "" {
+				fmt.Fprintln(os.Stderr, t("bundle_missing"))
+			} else {
+				fmt.Fprintln(os.Stderr, messages["en"]["bundle_missing"])
+				fmt.Fprintln(os.Stderr)
+				fmt.Fprintln(os.Stderr, messages["tr"]["bundle_missing"])
+			}
+			return 1
+		}
 	}
-	b, err := payload.Open(o.bundlePath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, t("bundle_error"))
 		fmt.Fprintf(os.Stderr, "%s: %v\n", t("err_detail"), err)

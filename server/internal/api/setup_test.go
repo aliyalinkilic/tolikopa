@@ -186,14 +186,11 @@ func TestRootCAPassesOnlyCertificates(t *testing.T) {
 func TestBuildToolAndConfig(t *testing.T) {
 	a := testAPI(t, true, true)
 
-	for _, mode := range []string{bundle.ModeSetup, bundle.ModeUpdate} {
-		out, err := a.buildTool(goodSetup(), mode, "tr")
+	unzip := func(raw []byte) map[string][]byte {
+		t.Helper()
+		zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 		if err != nil {
-			t.Fatalf("%s: %v", mode, err)
-		}
-		zr, err := zip.NewReader(bytes.NewReader(out), int64(len(out)))
-		if err != nil {
-			t.Fatalf("%s: %v", mode, err)
+			t.Fatal(err)
 		}
 		files := map[string][]byte{}
 		for _, f := range zr.File {
@@ -203,6 +200,28 @@ func TestBuildToolAndConfig(t *testing.T) {
 			rc.Close()
 			files[f.Name] = b.Bytes()
 		}
+		return files
+	}
+	toolExe, _, err := a.arts.Read(artifacts.SetupTool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, mode := range []string{bundle.ModeSetup, bundle.ModeUpdate} {
+		exeName := "tolikopa-" + mode + ".exe"
+		out, err := a.buildTool(goodSetup(), mode, "tr", exeName)
+		if err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		dl := unzip(out)
+		if len(dl) != 3 || dl[bundle.ReadmeName] == nil {
+			t.Errorf("%s: download entries: %d", mode, len(dl))
+		}
+		// The executable is the artifact itself, byte for byte: no overlay.
+		if !bytes.Equal(dl[exeName], toolExe) {
+			t.Errorf("%s: %s is not the unmodified artifact", mode, exeName)
+		}
+		files := unzip(dl[bundle.BundleName])
 		var m bundle.Manifest
 		if err := json.Unmarshal(files["manifest.json"], &m); err != nil {
 			t.Fatal(err)
@@ -244,13 +263,13 @@ func TestBuildToolAndConfig(t *testing.T) {
 func TestBuildToolFailureModes(t *testing.T) {
 	// No artifacts → 503-class error regardless of the rest.
 	a := testAPI(t, false, true)
-	if _, err := a.buildTool(goodSetup(), bundle.ModeSetup, "en"); err == nil || !strings.Contains(err.Error(), artifacts.ErrUnavailable.Error()) {
+	if _, err := a.buildTool(goodSetup(), bundle.ModeSetup, "en", "tolikopa-setup.exe"); err == nil || !strings.Contains(err.Error(), artifacts.ErrUnavailable.Error()) {
 		t.Errorf("without artifacts: %v", err)
 	}
 
 	// Artifacts present, config + CA missing → 409 setup_incomplete listing them.
 	a = testAPI(t, true, false)
-	_, err := a.buildTool(model.SetupConfig{GPOName: defaultGPOName}, bundle.ModeSetup, "en")
+	_, err := a.buildTool(model.SetupConfig{GPOName: defaultGPOName}, bundle.ModeSetup, "en", "tolikopa-setup.exe")
 	status, body := errCode(t, err)
 	missing, _ := body.Params["missing"].([]string)
 	if status != 409 || body.Code != apierr.SetupIncomplete || strings.Join(missing, ",") != "server_url,root_ca,domain" {
@@ -269,7 +288,7 @@ func TestBuildToolFailureModes(t *testing.T) {
 	a = testAPI(t, true, true)
 	c := goodSetup()
 	c.GPOName = "$(calc)"
-	_, err = a.buildTool(c, bundle.ModeSetup, "en")
+	_, err = a.buildTool(c, bundle.ModeSetup, "en", "tolikopa-setup.exe")
 	status, body = errCode(t, err)
 	if status != 409 || body.Code != apierr.SetupIncomplete {
 		t.Errorf("invalid stored gpo_name: %d %s", status, body.Code)
