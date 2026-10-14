@@ -69,13 +69,13 @@ func main() {
 
 	switch cmd {
 	case "install":
-		mustDo(service.Install(), "Tolikopa servisi kuruldu.")
+		mustDo(service.Install(), "Tolikopa service installed.")
 	case "uninstall":
-		mustDo(service.Uninstall(), "Tolikopa servisi kaldirildi.")
+		mustDo(service.Uninstall(), "Tolikopa service removed.")
 	case "start":
-		mustDo(service.StartService(), "Tolikopa servisi baslatildi.")
+		mustDo(service.StartService(), "Tolikopa service started.")
 	case "stop":
-		mustDo(service.StopService(), "Tolikopa servisi durduruldu.")
+		mustDo(service.StopService(), "Tolikopa service stopped.")
 	case "run":
 		if err := service.RunForeground(cfg, log, version); err != nil {
 			fatalf("calisma hatasi: %v", err)

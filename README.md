@@ -40,42 +40,26 @@ Admin browser  ◄── React panel (live WebSocket)
 - [`docs/`](docs/) — technical documentation (see below).
 - [`CLAUDE.md`](CLAUDE.md) — development guide and conventions.
 
-## Quick start
+## Installation
 
-**1. Server (Ubuntu):**
-```bash
-git clone https://github.com/aliyalinkilic/tolikopa.git ~/tolikopa && cd ~/tolikopa
-sudo ./setup.sh
-```
-It first checks the prerequisites (Docker, Compose, free ports, disk space, outbound internet
-access); it installs nothing itself — if something is missing, it prints the commands to fix it and
-stops. It then asks for the panel's DNS name (e.g. `tolikopa.corp.local`), the server's IP address
-and the first administrator account; generates the secret keys and a self-signed TLS certificate,
-builds and starts the whole stack, and creates the administrator. Finally it prints the panel
-address and the certificate fingerprint.
+1. **Ubuntu server:** install Docker and git, `git clone` this repository, run `sudo ./setup.sh`
+   (`--lang en` for English). It asks for the panel's DNS name, the server's IP and the first
+   admin, then builds and starts everything.
+2. **First sign-in:** open `https://<server IP>`, check the certificate fingerprint, sign in.
+3. **Setup wizard:** enter the server address and the domain details, download `tolikopa-setup.exe`.
+4. **Domain:** run the tool on a domain-joined admin PC. It copies the agent to NETLOGON, creates
+   the DNS record and the GPO, and makes the PCs trust the panel's certificate. No domain password
+   ever reaches the panel.
+5. **Verify** on one PC (`gpupdate /force`); the rest of the fleet follows by itself.
 
-**2. Panel — setup wizard:** open `https://<name>` (or `https://<ip>` if there is no DNS record
-yet). Since the certificate is not trusted yet, the browser will show a warning — continue if the
-fingerprint matches. Sign in as the administrator; the wizard asks for the server address and the
-domain details (FQDN, target OU, GPO name).
-
-**3. Domain — `tolikopa-setup.exe`:** run the tool downloaded at the end of the wizard on a
-domain-joined computer, under an account that is allowed to create GPOs. It shows its plan and asks
-for confirmation; it then copies the files to NETLOGON, creates the panel's **DNS record**, creates
-and links the GPO, and uses the same GPO to make the panel's **certificate trusted on the
-computers**. No domain password is ever entered into the panel.
-
-**Updating:** `git pull && sudo ./setup.sh`. If the agent has changed, the panel's Setup page
-offers `tolikopa-update.exe`. Back up `deploy/.env` and `deploy/tls/`.
-
-Manual installation and details: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md),
-[`docs/GPO-DEPLOYMENT.md`](docs/GPO-DEPLOYMENT.md). To migrate a system installed under the old
-name ("Gozcu"): [`docs/UPGRADING.md`](docs/UPGRADING.md).
+Step-by-step guide: [`docs/INSTALLATION.md`](docs/INSTALLATION.md). To migrate a system installed
+under the old name ("Gozcu"): [`docs/UPGRADING.md`](docs/UPGRADING.md).
 
 ## Documentation
 
 | Document | Contents |
 |----------|----------|
+| [`docs/INSTALLATION.md`](docs/INSTALLATION.md) | Step-by-step installation guide |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System architecture, data flow, components |
 | [`docs/AGENT.md`](docs/AGENT.md) | Agent design, collected metrics, **privacy allowlist** |
 | [`docs/DATABASE.md`](docs/DATABASE.md) | TimescaleDB schema, hypertables, aggregates |

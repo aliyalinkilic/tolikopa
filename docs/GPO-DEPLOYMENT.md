@@ -2,7 +2,7 @@
 
 The agent is deployed to every domain-joined PC **without any installer UI**, via Group Policy.
 The mechanism: the payload is kept in NETLOGON; a **GPP Scheduled Task (Update mode)** runs the
-idempotent `bootstrap.ps1` as SYSTEM on every GP refresh (~90 min) and at startup; the script
+idempotent `bootstrap.ps1` as SYSTEM shortly after Group Policy registers it, at startup and daily; the script
 installs/updates/repairs the Windows service. This gives both GPP's self-healing behaviour and a
 real service (SESSIONCHANGE + automatic restart).
 

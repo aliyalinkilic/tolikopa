@@ -6,7 +6,7 @@
     Computer Configuration > Preferences > Control Panel Settings > Scheduled Tasks
     New > Scheduled Task (At least Windows 7), Action = Update
     User = NT AUTHORITY\SYSTEM, Run whether logged on or not, Highest privileges, Hidden
-    Triggers: At startup + Daily
+    Triggers: At task creation/modification (1 min delay) + At startup + Daily
     Action: powershell.exe -WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass
             -File \\CORP\NETLOGON\Tolikopa\bootstrap.ps1
 -->
@@ -39,6 +39,12 @@
           </RestartOnFailure>
         </Settings>
         <Triggers>
+          <!-- "At task creation/modification": runs shortly after Group Policy
+               (re)registers the task, so a gpupdate is enough to install. -->
+          <RegistrationTrigger>
+            <Enabled>true</Enabled>
+            <Delay>PT1M</Delay>
+          </RegistrationTrigger>
           <BootTrigger>
             <Enabled>true</Enabled>
             <Delay>PT1M</Delay>
