@@ -18,6 +18,21 @@ modern, animated web admin panel.
 - Classification by program type (browser / office / development / media / ...)
 - Network (upload/download) usage per username — on a timeline
 
+## Screenshots
+
+Taken from a live installation; machine names, user names, departments and addresses are replaced
+with placeholders.
+
+![Overview](docs/screenshots/overview.jpg)
+
+| Devices | Machine details |
+|---|---|
+| ![Devices](docs/screenshots/devices.jpg) | ![Machine details](docs/screenshots/machine-details.jpg) |
+| **Machine history (7 days)** | **Users** |
+| ![Machine history](docs/screenshots/machine-charts.jpg) | ![Users](docs/screenshots/users.jpg) |
+
+![Setup page](docs/screenshots/setup.jpg)
+
 ## Architecture
 
 ```
