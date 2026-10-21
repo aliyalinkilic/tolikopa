@@ -32,11 +32,15 @@ with placeholders.
 
 ![Overview](docs/screenshots/overview.jpg)
 
-| Devices | Machine details |
+| Recent events and fleet health trend | Devices |
 |---|---|
-| ![Devices](docs/screenshots/devices.jpg) | ![Machine details](docs/screenshots/machine-details.jpg) |
-| **Machine history (7 days)** | **Users** |
-| ![Machine history](docs/screenshots/machine-charts.jpg) | ![Users](docs/screenshots/users.jpg) |
+| ![Recent events and fleet health trend](docs/screenshots/overview-trend.jpg) | ![Devices](docs/screenshots/devices.jpg) |
+| **Machine details** | **Machine history (7 days)** |
+| ![Machine details](docs/screenshots/machine-details.jpg) | ![Machine history](docs/screenshots/machine-charts.jpg) |
+| **Users** | **Alerts** |
+| ![Users](docs/screenshots/users.jpg) | ![Alerts](docs/screenshots/alerts.jpg) |
+| **Optimization** | **Process categories** |
+| ![Optimization](docs/screenshots/optimization.jpg) | ![Process categories](docs/screenshots/categories.jpg) |
 
 ![Setup page](docs/screenshots/setup.jpg)
 
