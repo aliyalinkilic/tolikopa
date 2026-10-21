@@ -6,14 +6,15 @@ import type { QueryParams } from '@/lib/api'
 import { localizeOverview, normalizeOverview } from '@/lib/remediation'
 import type { RemediationOverviewWire } from '@/lib/remediation'
 import type {
-  ActivityResponse, AlertDTO, AlertRuleDTO, AppUsage, CategoryRule, CategoryShare, DiskSeries,
-  EventDTO, FleetMachine, FleetOverview, FleetSummary, HourlyActivityResponse,
-  GeneralSettings, MachineDetail, MachineRemediation, MetricSeries, NetPoint, NewPanelUser, PanelUser, PanelUserPatch,
+  ActivityResponse, AlertDTO, AlertRuleDTO, CrashAppsResponse, AppUsage, CategoryRule, CategoryShare, DiskSeries,
+  EventDTO, FleetMachine, FleetOverview, FleetSummary, FleetTrendRange, FleetTrendResponse, HourlyActivityResponse,
+  GeneralSettings, GeneralSettingsUpdate, MachineDetail, MachineRemediation, MetricSeries, NetPoint, NewPanelUser, PanelUser, PanelUserPatch,
   RecoveryCodes, SetupConfig, SetupState, TotpSetup,
-  ArchivedMachinesResponse, MachineArchiveResult, RemediationOverview,
+  ArchivedMachinesResponse, MachineArchiveResult, MachinePurgeResult, RemediationOverview,
   RemediationAttemptsResponse, RemediationFailuresResponse, RemediationImpactResponse, RemediationPolicy, RemediationPolicyUpdate, SessionItem,
+  RemediationPostureResponse,
   SlowMachinesResponse, TagInfo, TagSummary, TopAppsBy, TopAppsRange, TopAppsResponse, TopProcess,
-  UnclassifiedProcess, UserLogon, UserProfileUpdate, UserSummary,
+  UnclassifiedProcess, UnclassifiedSort, CategoryTestResult, UserLogon, UserProfileUpdate, UserSummary,
 } from '@/lib/types'
 
 const LIVE_REFETCH = 20_000
@@ -59,6 +60,14 @@ export function useHourlyActivity(days = 7) {
   return useQuery({
     queryKey: ['stats', 'hourly-activity', days],
     queryFn: () => api.get<HourlyActivityResponse>('/api/stats/hourly-activity', { days }),
+    refetchInterval: STATS_REFETCH,
+  })
+}
+
+export function useFleetTrend(range: FleetTrendRange = '24h') {
+  return useQuery({
+    queryKey: ['stats', 'fleet-trend', range],
+    queryFn: () => api.get<FleetTrendResponse>('/api/stats/fleet-trend', { range }),
     refetchInterval: STATS_REFETCH,
   })
 }
@@ -280,6 +289,9 @@ export interface AlertFilters {
   status?: string
   severity?: string
   machine?: string
+  rule?: string
+  /** Machine tag, case-insensitive. */
+  tag?: string
   from?: string
   to?: string
 }
@@ -316,7 +328,11 @@ export function useCreateCategory() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (rule: Omit<CategoryRule, 'id'>) => api.post<CategoryRule>('/api/admin/categories', rule),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'categories'] }),
+    // The unclassified list is resolved against the live rules, so it moves too.
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'categories'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'unclassified'] })
+    },
   })
 }
 
@@ -324,7 +340,11 @@ export function useUpdateCategory() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (rule: CategoryRule) => api.put<CategoryRule>(`/api/admin/categories/${rule.id}`, rule),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'categories'] }),
+    // The unclassified list is resolved against the live rules, so it moves too.
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'categories'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'unclassified'] })
+    },
   })
 }
 
@@ -332,21 +352,43 @@ export function useDeleteCategory() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: number) => api.del<void>(`/api/admin/categories/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'categories'] }),
+    // The unclassified list is resolved against the live rules, so it moves too.
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'categories'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'unclassified'] })
+    },
   })
 }
 
-export function useUnclassified(win: TimeWindow) {
+export function useUnclassified(win: TimeWindow, sort: UnclassifiedSort = 'machines') {
   return useQuery({
-    queryKey: ['admin', 'unclassified', win.from, win.to],
-    queryFn: () => api.get<UnclassifiedProcess[]>('/api/admin/unclassified', win),
+    queryKey: ['admin', 'unclassified', win.from, win.to, sort],
+    queryFn: () => api.get<UnclassifiedProcess[]>('/api/admin/unclassified', { ...win, sort }),
   })
+}
+
+/** Which rule a process name resolves to right now (empty name = idle). */
+export function useCategoryTest(name: string) {
+  const q = name.trim()
+  return useQuery({
+    queryKey: ['admin', 'categories', 'test', q],
+    queryFn: () => api.get<CategoryTestResult>('/api/admin/categories/test', { name: q }),
+    enabled: q !== '',
+    staleTime: 10_000,
+  })
+}
+
+export interface ReclassifyRequest {
+  window: string
+  /** Only these process names (e.g. the ones a new rule matches). */
+  names?: string[]
 }
 
 export function useReclassify() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (window: string) => api.post<void>('/api/admin/reclassify', { window }),
+    mutationFn: (req: string | ReclassifyRequest) =>
+      api.post<{ updated_rows: number; names: number }>('/api/admin/reclassify', typeof req === 'string' ? { window: req } : req),
     // Narrow: reclassification only moves processes between categories. A blanket
     // ['admin'] invalidation would also refetch — and visually clobber — unsaved
     // drafts on the other settings tabs.
@@ -369,7 +411,19 @@ export function useUpdateAlertRules() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (rules: AlertRuleDTO[]) => api.put<AlertRuleDTO[]>('/api/admin/alert-rules', rules),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'alert-rules'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'alert-rules'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'crash-apps'] })
+    },
+  })
+}
+
+/** Faulting processes of recent crash events — suggestions for the crash_storm ignore list. */
+export function useCrashApps(window = '7d', limit = 15) {
+  return useQuery({
+    queryKey: ['admin', 'crash-apps', window, limit],
+    queryFn: () => api.get<CrashAppsResponse>('/api/admin/crash-apps', { window, limit }),
+    staleTime: 60_000,
   })
 }
 
@@ -429,7 +483,7 @@ export function useGeneralSettings(enabled = true) {
 export function useUpdateGeneralSettings() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (s: GeneralSettings) => api.put<GeneralSettings | void>('/api/admin/settings/general', s),
+    mutationFn: (s: GeneralSettingsUpdate) => api.put<GeneralSettings | void>('/api/admin/settings/general', s),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'general-settings'] })
       // org name / default language / policy are mirrored in the public settings.
@@ -580,6 +634,16 @@ export function useRemediationImpact(days: number) {
 
 /** Saves the fleet-wide policy. The mutation owns invalidation; the caller owns
  *  the toast (see useCreatePanelUser for the same split). */
+/** Optimization page roll-up: switches per platform, per-item progress, per-machine
+ *  posture and Linux advisory. Read-only. */
+export function useRemediationPosture() {
+  return useQuery({
+    queryKey: ['admin', 'remediation', 'posture'],
+    queryFn: () => api.get<RemediationPostureResponse>('/api/admin/remediation/posture'),
+    refetchInterval: REMEDIATION_REFETCH,
+  })
+}
+
 export function useUpdateRemediationPolicy() {
   const qc = useQueryClient()
   return useMutation({
@@ -643,4 +707,21 @@ export function useArchiveMachines() {
 
 export function useRestoreMachines() {
   return useArchiveWrite('/api/admin/machines/restore')
+}
+
+/** Permanently deletes archived machines and all their data (irreversible). */
+export function usePurgeMachines() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (machineIds: string[]) =>
+      api.post<MachinePurgeResult>('/api/admin/machines/purge', { machine_ids: machineIds }),
+    onSuccess: (_res, ids) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'machines', 'archived'] })
+      qc.invalidateQueries({ queryKey: ['fleet'] })
+      qc.invalidateQueries({ queryKey: ['fleet-summary'] })
+      qc.invalidateQueries({ queryKey: ['fleet-overview'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'remediation'] })
+      for (const id of ids) qc.removeQueries({ queryKey: ['machine', id] })
+    },
+  })
 }

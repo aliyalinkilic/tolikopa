@@ -85,8 +85,26 @@ The agent sends **cumulative** NIC counters + `boot_time`. At ingest, the previo
 ## Program-type classification
 
 `process_category` (admin-editable). At ingest it is resolved with an in-memory cache as
-`exact→prefix→glob` (lower priority wins), and `category_id` is denormalized. Unknown → NULL.
-Reclassification applies going forward; `/api/admin/reclassify` re-resolves the raw window (21d).
+`exact→prefix→glob` (within a type the lower priority wins; a prefix/glob tie goes to the longer
+value), and the winning **rule id** is denormalized as `category_id`. Unknown → NULL.
+Reclassification applies going forward; `/api/admin/reclassify` re-resolves the raw window (21d),
+optionally for a given list of names only. Changing a rule's category needs no reclassify: stored
+rows point at the rule id, which resolves to the new name immediately.
+
+- **Names.** Only process base names are stored: lower case, `.exe` stripped, anything path-like
+  (a backslash or a leading `/`) reduced to its basename. A forward slash that is not a path is a
+  Linux kernel thread (`kworker/0:1-events`, `ksoftirqd/3`): only the part before the first slash
+  is kept (`kworker`). Before this the per-CPU suffix was stored, which no rule could match.
+- **`builtin`** (0018): `true` = shipped by a seed migration and unchanged since. Any admin edit
+  through the API clears it; seed migrations only ever insert free `(match_type, match_value)`
+  pairs and update `builtin` rows, so admin rules are never overwritten.
+- **Categories:** `browser`, `office`, `dev`, `media`, `comms`, `remote` (remote access/support),
+  `security` (AV/EDR, VPN clients, password managers), `utility` (drivers, OEM services, updaters,
+  sync/backup agents), `system`, `other`. `system`, `security` and `utility` are background overhead
+  and are left out of the usage breakdowns (machine/user/tag category shares).
+- 0018 adds ~570 generic, publicly known executable names (seed priorities: exact 10, prefix 50,
+  glob 90), moves `msmpeng`/`securityhealthservice` to `security` and `cmd`/`powershell` to
+  `system` (both only while still `builtin`).
 
 ## Endpoint hygiene (0011_remediation.sql)
 
@@ -115,6 +133,10 @@ labels do not invalidate deployed agents.
 Added to the `machine` table: `remediation_allowed bool` (whether the local GPO switches permit
 action — `enforce AND (apps OR startup)`), `remediation_catalog_version text`,
 `remediation_policy_revision text`, `remediation_reported_at timestamptz`.
+Migration `0020` adds the three switches uncollapsed — `remediation_allow_apps`,
+`remediation_allow_startup`, `remediation_enforce` (all `bool`, NULL until the machine reports
+after the migration) — so the panel can say which switch blocks which kind of action. The agent
+always sent all three; nothing new is collected.
 
 **`remediation_attempt`** is a hypertable: `create_hypertable(ts, 7 days)`, UNIQUE
 `(machine_id, ts, kind, item_id, action)` (every hypertable key includes `ts` → idempotent),
@@ -179,6 +201,7 @@ is missing, the defaults apply):
 |-------|---------|------|
 | `setup_config` | object: `{"server_url","domain_fqdn","netbios","target_dn","gpo_name","defender_exclusion"}` | rollout settings (docs/API.md §11.2). While the row is missing: all strings `""`, `gpo_name` = `"Tolikopa Agent"`, `defender_exclusion` = `false`. **Contains no credentials** — the server holds no domain username/password. Written only by `PUT /api/admin/setup/config` (with the tool's validation rules) |
 | `setup_completed_at` | RFC 3339 string or `null` | the moment the wizard was completed; missing row / `null` = not completed (`setup_complete=false`). `complete` writes it, `reopen` sets it to `null` |
+| `work_hours` | object: `{"days","start","end","tags","grace_minutes","offline_after_minutes","stale_after_days","timezone"}` | the work-hours schedule (docs/API.md §2.3, §6.1), part of the general settings but **not** served publicly. While the row is missing or unreadable: Mon–Fri 09:00–17:30 Europe/Istanbul, grace 60, offline_after 60, stale_after_days 1, tags `[]` (no machine is work-hours-only, so every machine is monitored 24/7 until an admin picks the tags). A row saved before `stale_after_days` existed reads it as 1 (no migration needed). Re-read by the alert engine every evaluation |
 
 The ingest token, the setup code and the panel's TLS certificate are **not** kept in this table
 (they are, respectively, an environment variable, in memory only, and a file).
@@ -187,14 +210,34 @@ The ingest token, the setup code and the panel's TLS certificate are **not** kep
 that go into the rule's message (`hostname`, `threshold`, `unit`, … — docs/API.md §6), and the API
 exposes them as `params`. `alert.message` is a fallback text generated in `default_lang`. The
 `detail` of older rows is partial; the API fills in the missing values at read time (except
-`threshold`).
+`threshold`). When the engine resolves an alert for a reason other than "condition cleared" it adds
+`detail.resolved_reason` (`work_hours_end`: an offline alert of a work-hours device closed
+because the work day ended; `not_stale`: a stale alert whose device reported again outside work
+hours). Offline alerts of work-hours devices also carry `detail.kind` (`not_started` \|
+`went_offline` \| `stale`); the engine reads it back to tell a long-lived stale alert from a daily
+one. `alert.severity` is `info` \| `warning` \| `critical` (plain text, no check constraint;
+`info` is used by the work-hours `not_started` and `stale` kinds and never sends e-mail).
+
+**Alert tuning (0019_alert_tuning.sql).** Raises the seeded `mem_high` thresholds from 90/97 to
+95/98 % (only if still at the seed values) and adds an explicit `"ignore_apps": []` to
+`crash_storm.params` (edited in the panel via `PUT /api/admin/alert-rules` `ignore_apps`; stored
+canonical: lower-case base names without `.exe`). Hysteresis, per-rule resolve grace and the work-hours logic live in the engine
+(docs/API.md §6.1), not in the schema.
 
 ## Machine archive (0013_machine_archive.sql)
 
 | Object | Note |
 |---|---|
 | `machine.archived_at`, `machine.archived_by` | Set = the machine has been decommissioned. Current-state queries filter with `m.archived_at IS NULL`; historical hypertable/cagg data is not deleted. Partial index `WHERE archived_at IS NOT NULL`. |
-| `machine_archive_audit` | Permanent audit: `archive` / `restore` / `auto_restore` (when ingest arrives from an archived machine), `actor`, `actor_ip`. Never pruned. |
+| `machine_archive_audit` | Permanent audit: `archive` / `restore` / `auto_restore` (when ingest arrives from an archived machine) / `purge` (permanent deletion, `POST /api/admin/machines/purge`), `ts`, `hostname`, `actor` (panel username), `actor_ip`, and for `purge` `retained_attempts` (0021: how many `remediation_attempt` rows of the machine were kept). Index `(machine_id, ts DESC)` (0021). Never pruned — also survives a purge. |
+
+**Purge.** A new table keyed by `machine_id` must be added to the purge lists in
+`server/internal/api/purge.go` (`purgeCompressed` / `purgePlain`; caggs to `purgeCaggSources`) and to
+`TestPurgeCoversEveryMachineTable`, or permanently deleting a machine leaves its rows behind. The one
+deliberate exclusion is `remediation_attempt` (`purgeRetained`): it is the actuation audit trail and
+outlives the machine, ageing out with its 365-day retention. The admin attempt feed shows such rows
+with the hostname from the `purge` audit row and `machine_deleted: true`; the hygiene posture,
+open-failures and impact views skip them (they join `machine`).
 
 When writing a new "current state" query (a list/count over `machine` or `machine_live`), adding the
 archive filter is mandatory; without it, retired machines reappear in counts and alerts.

@@ -52,15 +52,28 @@ func (c *Categories) Refresh(ctx context.Context) error {
 	}
 	defer rows.Close()
 
-	exact := make(map[string]catRule)
-	var prefixes, globs []catRule
-	idToName := make(map[int16]string)
-
+	var rules []catRule
 	for rows.Next() {
 		var r catRule
 		if err := rows.Scan(&r.id, &r.category, &r.matchType, &r.matchValue, &r.priority); err != nil {
 			return err
 		}
+		rules = append(rules, r)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	c.load(rules)
+	return nil
+}
+
+// load builds the lookup structures from a rule set and swaps them in.
+func (c *Categories) load(rules []catRule) {
+	exact := make(map[string]catRule)
+	var prefixes, globs []catRule
+	idToName := make(map[int16]string)
+
+	for _, r := range rules {
 		r.matchValue = strings.ToLower(strings.TrimSpace(r.matchValue))
 		idToName[r.id] = r.category
 		switch r.matchType {
@@ -73,9 +86,6 @@ func (c *Categories) Refresh(ctx context.Context) error {
 		case "glob":
 			globs = append(globs, r)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
 	}
 
 	byPriority := func(list []catRule) {
@@ -95,7 +105,6 @@ func (c *Categories) Refresh(ctx context.Context) error {
 	c.globs = globs
 	c.idToName = idToName
 	c.mu.Unlock()
-	return nil
 }
 
 // Resolve maps a raw process name to (category_id, category, ok). ok is false
@@ -128,6 +137,46 @@ func (c *Categories) Resolve(name string) (int16, string, bool) {
 	return 0, "", false
 }
 
+// Match is one enabled rule that matches a process name, as reported by Explain.
+type Match struct {
+	ID         int16
+	Category   string
+	MatchType  string
+	MatchValue string
+	Priority   int
+}
+
+// Explain normalises name and returns every enabled rule that matches it, in
+// resolution order: the first element is the rule Resolve would pick, the rest
+// are shadowed by it. An empty slice means the name stays unclassified.
+func (c *Categories) Explain(name string) (string, []Match) {
+	norm := NormalizeName(name)
+	out := []Match{}
+	if norm == "" {
+		return norm, out
+	}
+	add := func(r catRule) {
+		out = append(out, Match{ID: r.id, Category: r.category, MatchType: r.matchType, MatchValue: r.matchValue, Priority: r.priority})
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if r, ok := c.exact[norm]; ok {
+		add(r)
+	}
+	for _, r := range c.prefixes {
+		if strings.HasPrefix(norm, r.matchValue) {
+			add(r)
+		}
+	}
+	for _, r := range c.globs {
+		if ok, err := path.Match(r.matchValue, norm); err == nil && ok {
+			add(r)
+		}
+	}
+	return norm, out
+}
+
 // Name returns the category name for a category_id, or "" if unknown.
 func (c *Categories) Name(id int16) string {
 	c.mu.RLock()
@@ -137,14 +186,27 @@ func (c *Categories) Name(id int16) string {
 
 // NormalizeName lowercases, takes the basename and strips a trailing ".exe" so
 // the classification map can key on the canonical process name.
+//
+// Linux kernel threads are named "<thread>/<cpu>[-<queue>]" ("kworker/0:1-events",
+// "ksoftirqd/3", "irq/31-vmw_vmci"). Taking the part after the slash turned each
+// into a per-CPU fragment ("0:1-events", "3") that no rule could classify and
+// that multiplied the distinct names, so a name with a forward slash that is not
+// an absolute path keeps only the part before the first slash ("kworker").
+// Anything path-like (a backslash, or a leading "/") is still reduced to its
+// basename: a path is never stored.
 func NormalizeName(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	if s == "" {
 		return ""
 	}
-	// Basename for both path separator styles.
-	if idx := strings.LastIndexAny(s, `/\`); idx >= 0 {
-		s = s[idx+1:]
+	switch {
+	case strings.HasPrefix(s, "/") || strings.Contains(s, `\`):
+		// Basename for both path separator styles.
+		if idx := strings.LastIndexAny(s, `/\`); idx >= 0 {
+			s = s[idx+1:]
+		}
+	case strings.Contains(s, "/"):
+		s = s[:strings.Index(s, "/")]
 	}
 	s = strings.TrimSuffix(s, ".exe")
 	return s

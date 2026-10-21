@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Archive, ArchiveRestore, CheckCircle2, Info } from 'lucide-react'
+import { Archive, ArchiveRestore, CheckCircle2, Info, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Checkbox } from '@/components/ui/Checkbox'
@@ -10,8 +10,9 @@ import { DataTable } from '@/components/DataTable'
 import type { Column } from '@/components/DataTable'
 import { EmptyState } from '@/components/EmptyState'
 import { SkeletonText } from '@/components/Skeleton'
-import { useArchiveMachines, useArchivedMachines, useFleet, useRestoreMachines } from '@/hooks/queries'
+import { useArchiveMachines, useArchivedMachines, useFleet, usePurgeMachines, useRestoreMachines } from '@/hooks/queries'
 import { useToast } from '@/hooks/useToast'
+import { errorText } from '@/lib/errors'
 import { displayUser, formatDate, relativeTime } from '@/lib/format'
 import { kindLabel } from '@/lib/labels'
 import type { ArchivedMachine, FleetMachine } from '@/lib/types'
@@ -25,7 +26,8 @@ const STALE_DAYS = [7, 14, 30, 60, 90] as const
 /**
  * "Makineler" — retiring PCs that left the fleet. Archiving hides a machine from
  * every current-state view but keeps its history, and an archived machine whose
- * agent reports again comes back on its own, so nothing here loses data.
+ * agent reports again comes back on its own. The one destructive action is
+ * "Kalıcı Sil" on an archived machine, gated by typing its name.
  */
 export function MachinesSection() {
   const t = useT()
@@ -223,7 +225,21 @@ function ArchivedList() {
   const t = useT()
   const archived = useArchivedMachines()
   const restore = useRestoreMachines()
+  const purge = usePurgeMachines()
   const { push } = useToast()
+  const [purgeTarget, setPurgeTarget] = useState<ArchivedMachine | null>(null)
+
+  const onPurge = () => {
+    const m = purgeTarget
+    if (!m) return
+    purge.mutate([m.machine_id], {
+      onSuccess: () => {
+        setPurgeTarget(null)
+        push({ title: t('settings.machines.purged', { host: m.hostname }), tone: 'ok' })
+      },
+      onError: (err) => push({ title: t('settings.machines.purgeFailed'), description: errorText(err), tone: 'crit' }),
+    })
+  }
 
   const onRestore = (m: ArchivedMachine) =>
     restore.mutate([m.machine_id], {
@@ -273,15 +289,25 @@ function ArchivedList() {
       header: '',
       align: 'right',
       render: (m) => (
-        <Button
-          size="sm"
-          variant="ghost"
-          leftIcon={<ArchiveRestore className="size-4" aria-hidden />}
-          onClick={() => onRestore(m)}
-          loading={restore.isPending && restore.variables?.[0] === m.machine_id}
-        >
-          {t('common.undo')}
-        </Button>
+        <div className="flex justify-end gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            leftIcon={<ArchiveRestore className="size-4" aria-hidden />}
+            onClick={() => onRestore(m)}
+            loading={restore.isPending && restore.variables?.[0] === m.machine_id}
+          >
+            {t('common.undo')}
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
+            leftIcon={<Trash2 className="size-4" aria-hidden />}
+            onClick={() => setPurgeTarget(m)}
+          >
+            {t('settings.machines.purge')}
+          </Button>
+        </div>
       ),
     },
   ]
@@ -317,6 +343,25 @@ function ArchivedList() {
           />
         )}
       </div>
+
+      <ConfirmDialog
+        open={purgeTarget !== null}
+        onClose={() => setPurgeTarget(null)}
+        onConfirm={onPurge}
+        loading={purge.isPending}
+        tone="danger"
+        title={t('settings.machines.purgeTitle', { host: purgeTarget?.hostname ?? '' })}
+        confirmLabel={t('settings.machines.purgeConfirm')}
+        description={
+          <Trans
+            k="settings.machines.purgeConfirmBody"
+            values={{ host: purgeTarget?.hostname ?? '' }}
+            tags={{ b: (c) => <strong className="font-semibold text-text">{c}</strong> }}
+          />
+        }
+        requireText={purgeTarget?.hostname}
+        requireTextLabel={t('settings.machines.purgeTypeLabel')}
+      />
     </Card>
   )
 }

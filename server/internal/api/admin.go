@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +16,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/aliyalinkilic/tolikopa/server/internal/apierr"
+	"github.com/aliyalinkilic/tolikopa/server/internal/ingest"
 	"github.com/aliyalinkilic/tolikopa/server/internal/model"
 )
 
@@ -103,11 +107,27 @@ func (a *API) PutMachineLabels(c echo.Context) error {
 
 // ── Category rules CRUD ──────────────────────────────────────────────────────
 
-// ListCategories handles GET /api/admin/categories.
+// ListCategories handles GET /api/admin/categories[?window=7d]. Each rule carries
+// how often it was the winning match over the window (from proc_cat_1h, whose
+// category_id is the rule id), so the panel can flag rules that never match.
 func (a *API) ListCategories(c echo.Context) error {
-	rows, err := a.pool.Query(c.Request().Context(),
-		`SELECT id, category, match_type, match_value, priority, enabled
-		 FROM process_category ORDER BY priority, category, match_value`)
+	ctx := c.Request().Context()
+	win := parseWindow(c.QueryParam("window"), 7*24*time.Hour)
+	if win > maxReclassifyWindow {
+		win = maxReclassifyWindow
+	}
+	rows, err := a.pool.Query(ctx, `
+		SELECT pc.id, pc.category, pc.match_type, pc.match_value, pc.priority, pc.enabled, pc.builtin,
+		       coalesce(s.samples, 0), coalesce(s.machines, 0), s.last_seen
+		FROM process_category pc
+		LEFT JOIN (
+			SELECT category_id, sum(samples)::bigint AS samples,
+			       count(DISTINCT machine_id)::bigint AS machines, max(bucket) AS last_seen
+			FROM proc_cat_1h
+			WHERE bucket >= $1 AND category_id IS NOT NULL
+			GROUP BY category_id
+		) s ON s.category_id = pc.id
+		ORDER BY pc.priority, pc.category, pc.match_value`, time.Now().Add(-win))
 	if err != nil {
 		return serverError(err)
 	}
@@ -115,7 +135,8 @@ func (a *API) ListCategories(c echo.Context) error {
 	out := []model.CategoryRule{}
 	for rows.Next() {
 		var r model.CategoryRule
-		if err := rows.Scan(&r.ID, &r.Category, &r.MatchType, &r.MatchValue, &r.Priority, &r.Enabled); err != nil {
+		if err := rows.Scan(&r.ID, &r.Category, &r.MatchType, &r.MatchValue, &r.Priority, &r.Enabled,
+			&r.Builtin, &r.Samples, &r.Machines, &r.LastSeen); err != nil {
 			return serverError(err)
 		}
 		out = append(out, r)
@@ -124,6 +145,27 @@ func (a *API) ListCategories(c echo.Context) error {
 		return serverError(err)
 	}
 	return c.JSON(http.StatusOK, out)
+}
+
+// TestCategory handles GET /api/admin/categories/test?name=…: which enabled rule
+// a process name resolves to with the current cache, plus the rules it shadows.
+func (a *API) TestCategory(c echo.Context) error {
+	name := c.QueryParam("name")
+	if strings.TrimSpace(name) == "" || len(name) > maxMatchValueLen {
+		return apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
+			"name is required (at most 128 characters)", map[string]any{"field": "name"})
+	}
+	norm, matches := a.cats.Explain(name)
+	res := model.CategoryTestResult{Name: norm, Matches: make([]model.CategoryTestMatch, 0, len(matches))}
+	for _, m := range matches {
+		res.Matches = append(res.Matches, model.CategoryTestMatch{
+			ID: int(m.ID), Category: m.Category, MatchType: m.MatchType, MatchValue: m.MatchValue, Priority: m.Priority,
+		})
+	}
+	if len(matches) > 0 {
+		res.Category = matches[0].Category
+	}
+	return c.JSON(http.StatusOK, res)
 }
 
 // Category-rule bounds. match_type is the closed set ingest.Categories resolves;
@@ -179,6 +221,7 @@ func (a *API) CreateCategory(c echo.Context) error {
 	if err != nil {
 		return apierr.New(http.StatusConflict, "category_rule_conflict", "rule could not be added (it may already exist)")
 	}
+	r.Builtin, r.Samples, r.Machines, r.LastSeen = false, 0, 0, nil
 	_ = a.cats.Refresh(ctx)
 	return c.JSON(http.StatusCreated, r)
 }
@@ -205,7 +248,8 @@ func (a *API) UpdateCategory(c echo.Context) error {
 	}
 	tag, err := a.pool.Exec(ctx, `
 		UPDATE process_category
-		SET category=$2, match_type=$3, match_value=$4, priority=$5, enabled=$6, updated_at=now()
+		SET category=$2, match_type=$3, match_value=$4, priority=$5, enabled=$6,
+		    builtin=false, updated_at=now()
 		WHERE id=$1`,
 		id, r.Category, r.MatchType, r.MatchValue, r.Priority, r.Enabled)
 	var pgErr *pgconn.PgError
@@ -220,6 +264,7 @@ func (a *API) UpdateCategory(c echo.Context) error {
 	}
 	_ = a.cats.Refresh(ctx)
 	r.ID = id
+	r.Builtin, r.Samples, r.Machines, r.LastSeen = false, 0, 0, nil
 	return c.JSON(http.StatusOK, r)
 }
 
@@ -241,30 +286,198 @@ func (a *API) DeleteCategory(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// Unclassified handles GET /api/admin/unclassified.
+// Unclassified handles GET /api/admin/unclassified[?from&to&sort=machines|count|cpu].
+// Names come from the proc_name_1h rollup and are resolved against the CURRENT
+// rule cache, so a name disappears from the list as soon as a rule covers it —
+// even before a reclassify rewrites the stored category_id. Each row carries its
+// distinct machine count (one raw count over just these names) and its share of
+// all process CPU in the window, so the most impactful names come first.
 func (a *API) Unclassified(c echo.Context) error {
 	ctx := c.Request().Context()
 	from, to := parseRange(c)
+	// Same bound as ListCategories/reclassify: the raw distinct-machine count
+	// below scans process_sample over the whole window.
+	if to.Sub(from) > maxReclassifyWindow {
+		from = to.Add(-maxReclassifyWindow)
+	}
+	sortBy := c.QueryParam("sort")
+	switch sortBy {
+	case "":
+		sortBy = "machines"
+	case "machines", "count", "cpu":
+	default:
+		return apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
+			"sort must be machines, count or cpu", map[string]any{"field": "sort"})
+	}
+
 	rows, err := a.pool.Query(ctx, `
-		SELECT process_name, count(*)::bigint FROM process_sample
-		WHERE category_id IS NULL AND ts BETWEEN $1 AND $2
-		GROUP BY process_name ORDER BY count(*) DESC LIMIT 100`, from, to)
+		SELECT process_name, sum(samples)::bigint, coalesce(sum(cpu_sum), 0)::float8, max(bucket)
+		FROM proc_name_1h
+		WHERE bucket >= $1 AND bucket < $2
+		GROUP BY process_name`, from.Truncate(time.Hour), to)
 	if err != nil {
 		return serverError(err)
 	}
-	defer rows.Close()
-	out := []model.UnclassifiedProcess{}
+	var total float64
+	byName := map[string]*model.UnclassifiedProcess{}
+	cpuSum := map[string]float64{}
 	for rows.Next() {
-		var u model.UnclassifiedProcess
-		if err := rows.Scan(&u.Name, &u.Count); err != nil {
+		var name string
+		var n int64
+		var cs float64
+		var last time.Time
+		if err := rows.Scan(&name, &n, &cs, &last); err != nil {
+			rows.Close()
 			return serverError(err)
 		}
-		out = append(out, u)
+		total += cs
+		if _, _, ok := a.cats.Resolve(name); ok {
+			continue
+		}
+		byName[name] = &model.UnclassifiedProcess{Name: name, Count: n, LastSeen: last.Add(time.Hour)}
+		cpuSum[name] = cs
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
 		return serverError(err)
 	}
+
+	out := make([]model.UnclassifiedProcess, 0, len(byName))
+	if len(byName) > 0 {
+		names := topUnclassifiedNames(byName, cpuSum, sortBy, maxUnclassifiedCandidates)
+		for n := range byName {
+			if _, keep := names[n]; !keep {
+				delete(byName, n)
+			}
+		}
+		nameList := make([]string, 0, len(names))
+		for n := range names {
+			nameList = append(nameList, n)
+		}
+		// Distinct machines are not summable across hourly buckets; count them
+		// from the raw rows, restricted to the unclassified names.
+		mrows, err := a.pool.Query(ctx, `
+			SELECT process_name, count(DISTINCT machine_id)::bigint
+			FROM process_sample
+			WHERE ts BETWEEN $1 AND $2 AND process_name = ANY($3)
+			GROUP BY process_name`, from, to, nameList)
+		if err != nil {
+			return serverError(err)
+		}
+		for mrows.Next() {
+			var name string
+			var m int64
+			if err := mrows.Scan(&name, &m); err != nil {
+				mrows.Close()
+				return serverError(err)
+			}
+			if u := byName[name]; u != nil {
+				u.Machines = m
+			}
+		}
+		mrows.Close()
+		if err := mrows.Err(); err != nil {
+			return serverError(err)
+		}
+		for name, u := range byName {
+			cs := cpuSum[name]
+			if u.Count > 0 {
+				u.CPUAvg = cs / float64(u.Count)
+			}
+			if total > 0 {
+				u.CPUShare = math.Min(cs/total, 1)
+			}
+			out = append(out, *u)
+		}
+	}
+	sortUnclassified(out, sortBy)
+	if len(out) > maxUnclassified {
+		out = out[:maxUnclassified]
+	}
+	// The bucket end can run past the window edge; never report a future time.
+	for i := range out {
+		if out[i].LastSeen.After(to) {
+			out[i].LastSeen = to
+		}
+	}
 	return c.JSON(http.StatusOK, out)
+}
+
+// maxUnclassified bounds GET /admin/unclassified (and so the names a single
+// reclassify from that list can carry).
+const maxUnclassified = 200
+
+// maxUnclassifiedCandidates bounds the names passed to the raw distinct-machine
+// count, so a fleet with many thousands of one-off process names cannot turn
+// one panel request into a huge `= ANY($3)` scan of process_sample.
+const maxUnclassifiedCandidates = 1000
+
+// topUnclassifiedNames keeps the at most max names that weigh most before the
+// machine count is known: by CPU for sort=cpu, otherwise by sample count, ties
+// broken by the other weight and then by name.
+func topUnclassifiedNames(byName map[string]*model.UnclassifiedProcess, cpuSum map[string]float64, sortBy string, max int) map[string]struct{} {
+	names := make([]string, 0, len(byName))
+	for n := range byName {
+		names = append(names, n)
+	}
+	if len(names) > max {
+		sort.Slice(names, func(i, j int) bool {
+			a, b := names[i], names[j]
+			ca, cb := byName[a].Count, byName[b].Count
+			sa, sb := cpuSum[a], cpuSum[b]
+			if sortBy == "cpu" {
+				if sa != sb {
+					return sa > sb
+				}
+				if ca != cb {
+					return ca > cb
+				}
+			} else {
+				if ca != cb {
+					return ca > cb
+				}
+				if sa != sb {
+					return sa > sb
+				}
+			}
+			return a < b
+		})
+		names = names[:max]
+	}
+	keep := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		keep[n] = struct{}{}
+	}
+	return keep
+}
+
+// sortUnclassified orders by the chosen key, breaking ties by the other weights
+// and finally by name so the list is stable between refreshes.
+func sortUnclassified(list []model.UnclassifiedProcess, by string) {
+	cpu := func(u model.UnclassifiedProcess) float64 { return u.CPUShare }
+	sort.SliceStable(list, func(i, j int) bool {
+		a, b := list[i], list[j]
+		switch by {
+		case "count":
+			if a.Count != b.Count {
+				return a.Count > b.Count
+			}
+		case "cpu":
+			if cpu(a) != cpu(b) {
+				return cpu(a) > cpu(b)
+			}
+		}
+		if a.Machines != b.Machines {
+			return a.Machines > b.Machines
+		}
+		if cpu(a) != cpu(b) {
+			return cpu(a) > cpu(b)
+		}
+		if a.Count != b.Count {
+			return a.Count > b.Count
+		}
+		return a.Name < b.Name
+	})
 }
 
 // Reclassify handles POST /api/admin/reclassify: re-resolve process_sample.category_id
@@ -274,8 +487,12 @@ func (a *API) Reclassify(c echo.Context) error {
 	ctx := c.Request().Context()
 	// {window?}: "6h", "24h", "7d" … (default 24h, at most 30 days). A value that
 	// does not parse used to fall back to 24h silently; it is now a 400.
+	// {names?}: restrict the pass to these process names (at most 200) — the panel
+	// sends the names a just-created rule matches, so applying one rule does not
+	// rewrite the whole window.
 	var body struct {
-		Window string `json:"window"`
+		Window string   `json:"window"`
+		Names  []string `json:"names"`
 	}
 	if c.Request().ContentLength != 0 {
 		if err := apierr.Bind(c, &body); err != nil {
@@ -294,24 +511,9 @@ func (a *API) Reclassify(c echo.Context) error {
 		return serverError(err)
 	}
 
-	// Distinct process names in the window.
-	rows, err := a.pool.Query(ctx,
-		`SELECT DISTINCT process_name FROM process_sample WHERE ts BETWEEN $1 AND $2`, from, to)
+	names, err := a.reclassifyNames(ctx, body.Names, from, to)
 	if err != nil {
-		return serverError(err)
-	}
-	names := []string{}
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			rows.Close()
-			return serverError(err)
-		}
-		names = append(names, n)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return serverError(err)
+		return err
 	}
 
 	var updated int64
@@ -347,9 +549,57 @@ func (a *API) Reclassify(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"updated_rows": updated,
+		"names":        len(names),
 		"from":         from,
 		"to":           to,
 	})
+}
+
+// maxReclassifyNames bounds the optional names list of POST /admin/reclassify.
+const maxReclassifyNames = maxUnclassified
+
+// reclassifyNames returns the process names a reclassify pass covers: the
+// validated, normalised request list when one was sent, otherwise every
+// distinct name in the window.
+func (a *API) reclassifyNames(ctx context.Context, req []string, from, to time.Time) ([]string, error) {
+	if req != nil {
+		if len(req) == 0 || len(req) > maxReclassifyNames {
+			return nil, apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
+				"names must list 1 to 200 process names", map[string]any{"field": "names"})
+		}
+		seen := map[string]bool{}
+		out := make([]string, 0, len(req))
+		for _, n := range req {
+			if len(n) > maxMatchValueLen {
+				return nil, apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
+					"a process name is longer than 128 characters", map[string]any{"field": "names"})
+			}
+			// Stored names are normalised at ingest; normalise the same way.
+			if norm := ingest.NormalizeName(n); norm != "" && !seen[norm] {
+				seen[norm] = true
+				out = append(out, norm)
+			}
+		}
+		return out, nil
+	}
+	rows, err := a.pool.Query(ctx,
+		`SELECT DISTINCT process_name FROM process_sample WHERE ts BETWEEN $1 AND $2`, from, to)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	defer rows.Close()
+	names := []string{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, serverError(err)
+		}
+		names = append(names, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, serverError(err)
+	}
+	return names, nil
 }
 
 // ── Alert rules ──────────────────────────────────────────────────────────────
@@ -357,7 +607,8 @@ func (a *API) Reclassify(c echo.Context) error {
 // GetAlertRules handles GET /api/admin/alert-rules.
 func (a *API) GetAlertRules(c echo.Context) error {
 	rows, err := a.pool.Query(c.Request().Context(),
-		`SELECT rule, enabled, warn_threshold, crit_threshold, for_seconds FROM alert_rule ORDER BY rule`)
+		`SELECT rule, enabled, warn_threshold, crit_threshold, for_seconds, params->'ignore_apps'
+		 FROM alert_rule ORDER BY rule`)
 	if err != nil {
 		return serverError(err)
 	}
@@ -365,8 +616,13 @@ func (a *API) GetAlertRules(c echo.Context) error {
 	out := []model.AlertRuleDTO{}
 	for rows.Next() {
 		var r model.AlertRuleDTO
-		if err := rows.Scan(&r.Rule, &r.Enabled, &r.WarnThreshold, &r.CritThreshold, &r.ForSeconds); err != nil {
+		var ignore []byte
+		if err := rows.Scan(&r.Rule, &r.Enabled, &r.WarnThreshold, &r.CritThreshold, &r.ForSeconds, &ignore); err != nil {
 			return serverError(err)
+		}
+		if r.Rule == crashStormRule {
+			apps := decodeIgnoreApps(ignore)
+			r.IgnoreApps = &apps
 		}
 		out = append(out, r)
 	}
@@ -386,11 +642,24 @@ func (a *API) PutAlertRules(c echo.Context) error {
 	if err := apierr.Bind(c, &rules); err != nil {
 		return err
 	}
-	for _, r := range rules {
+	for i, r := range rules {
 		if r.ForSeconds < 0 {
 			return apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
 				"for_seconds must not be negative", map[string]any{"field": "for_seconds", "rule": r.Rule})
 		}
+		if r.IgnoreApps == nil {
+			continue
+		}
+		if r.Rule != crashStormRule {
+			return apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
+				"ignore_apps is only valid for crash_storm",
+				map[string]any{"field": "ignore_apps", "rule": truncate(r.Rule, 64)})
+		}
+		apps, err := normalizeIgnoreApps(*r.IgnoreApps)
+		if err != nil {
+			return err
+		}
+		rules[i].IgnoreApps = &apps
 	}
 	tx, err := a.pool.Begin(ctx)
 	if err != nil {
@@ -407,6 +676,18 @@ func (a *API) PutAlertRules(c echo.Context) error {
 		if tag.RowsAffected() == 0 {
 			return apierr.WithParams(http.StatusBadRequest, apierr.InvalidRequest,
 				"unknown alert rule: "+truncate(r.Rule, 64), map[string]any{"field": "rule", "rule": truncate(r.Rule, 64)})
+		}
+		if r.IgnoreApps != nil {
+			raw, err := json.Marshal(*r.IgnoreApps)
+			if err != nil {
+				return serverError(err)
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE alert_rule
+				SET params = COALESCE(params, '{}'::jsonb) || jsonb_build_object('ignore_apps', $2::jsonb)
+				WHERE rule=$1`, r.Rule, string(raw)); err != nil {
+				return serverError(err)
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

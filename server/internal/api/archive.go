@@ -37,28 +37,9 @@ func (a *API) RestoreMachines(c echo.Context) error {
 func (a *API) setArchived(c echo.Context, archive bool) error {
 	ctx := c.Request().Context()
 
-	var body model.MachineArchiveRequest
-	if err := apierr.Bind(c, &body); err != nil {
+	ids, err := bindMachineIDs(c)
+	if err != nil {
 		return err
-	}
-	ids := make([]string, 0, len(body.MachineIDs))
-	seen := make(map[string]struct{}, len(body.MachineIDs))
-	for _, raw := range body.MachineIDs {
-		id := strings.TrimSpace(raw)
-		if id == "" || len(id) > 128 {
-			continue
-		}
-		if _, dup := seen[id]; dup {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	if len(ids) == 0 {
-		return apierr.BadRequest("no machines selected")
-	}
-	if len(ids) > maxArchiveBatch {
-		return apierr.WithParams(http.StatusBadRequest, "too_many_items", "at most 500 machines per request", map[string]any{"max": 500})
 	}
 
 	actor := ""
@@ -152,6 +133,36 @@ func (a *API) setArchived(c echo.Context, archive bool) error {
 		return serverError(err)
 	}
 	return c.JSON(http.StatusOK, model.MachineArchiveResult{Changed: len(changed)})
+}
+
+// bindMachineIDs decodes {machine_ids:[…]} (shared by archive, restore and
+// purge): trims, drops empty/oversized ids and duplicates, and enforces the
+// per-request cap. An empty result is a 400.
+func bindMachineIDs(c echo.Context) ([]string, error) {
+	var body model.MachineArchiveRequest
+	if err := apierr.Bind(c, &body); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(body.MachineIDs))
+	seen := make(map[string]struct{}, len(body.MachineIDs))
+	for _, raw := range body.MachineIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" || len(id) > 128 {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, apierr.BadRequest("no machines selected")
+	}
+	if len(ids) > maxArchiveBatch {
+		return nil, apierr.WithParams(http.StatusBadRequest, "too_many_items", "at most 500 machines per request", map[string]any{"max": maxArchiveBatch})
+	}
+	return ids, nil
 }
 
 // ArchivedMachines handles GET /api/admin/machines/archived.

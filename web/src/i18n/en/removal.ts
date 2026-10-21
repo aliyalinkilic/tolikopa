@@ -197,6 +197,8 @@ export const removal: Shape<typeof tr.removal> = {
     outcomes: 'Outcomes',
     lastAction: 'Last Action',
     time: 'Time',
+    machineDeleted: 'Deleted',
+    machineDeletedTitle: 'This machine was permanently deleted; the attempt is kept as an audit trail.',
     action: 'Action',
     outcome: 'Outcome',
     errorCode: 'Error Code',

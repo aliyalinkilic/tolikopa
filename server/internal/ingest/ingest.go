@@ -116,6 +116,16 @@ func clip(s string) string {
 	return string(r[:maxTextLen])
 }
 
+// baseName reduces a process name to its base name by dropping everything up to
+// the last '/' or '\'. The agent already sends only base names (docs/AGENT.md);
+// this is defence in depth so a faulting-module path can never be stored.
+func baseName(s string) string {
+	if i := strings.LastIndexAny(s, `/\`); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}
+
 // clipStrings bounds every free-text field of a batch.
 func clipStrings(env *model.Envelope) {
 	m := &env.Machine
@@ -134,7 +144,7 @@ func clipStrings(env *model.Envelope) {
 	}
 	for i := range env.Events {
 		e := &env.Events[i]
-		e.Kind, e.ProcessName, e.Severity = clip(e.Kind), clip(e.ProcessName), clip(e.Severity)
+		e.Kind, e.ProcessName, e.Severity = clip(e.Kind), clip(baseName(e.ProcessName)), clip(e.Severity)
 		for k, v := range e.Detail {
 			if len(k) > 64 {
 				delete(e.Detail, k)

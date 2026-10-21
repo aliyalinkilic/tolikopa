@@ -23,6 +23,7 @@ const Departments = lazy(() => import('@/pages/Departments').then((m) => ({ defa
 const Alerts = lazy(() => import('@/pages/Alerts').then((m) => ({ default: m.Alerts })))
 const SlowMachines = lazy(() => import('@/pages/SlowMachines').then((m) => ({ default: m.SlowMachines })))
 const Settings = lazy(() => import('@/pages/Settings').then((m) => ({ default: m.Settings })))
+const Optimization = lazy(() => import('@/pages/Optimization').then((m) => ({ default: m.Optimization })))
 const Setup = lazy(() => import('@/pages/Setup').then((m) => ({ default: m.Setup })))
 const Profile = lazy(() => import('@/pages/Profile').then((m) => ({ default: m.Profile })))
 const Enroll2FA = lazy(() => import('@/pages/Enroll2FA').then((m) => ({ default: m.Enroll2FA })))
@@ -83,6 +84,18 @@ function LegacyRedirect({ to }: { to: string }) {
   const qs = search.toString()
 
   return <Navigate to={{ pathname, search: qs ? `?${qs}` : '', hash: location.hash }} replace />
+}
+
+// "Apps to Remove" moved out of Settings into its own page. Old links
+// (/settings?tab=removal, and /ayarlar?sekme=uygulamalar via LegacyRedirect) land
+// on the Optimization page's app catalog; every other settings tab is untouched.
+function SettingsRoute() {
+  const location = useLocation()
+  const search = new URLSearchParams(location.search)
+  if (search.get('tab') === 'removal') {
+    return <Navigate to={{ pathname: '/optimization', search: '?tab=apps', hash: location.hash }} replace />
+  }
+  return <Settings />
 }
 
 const LEGACY_ROUTES: [from: string, to: string][] = [
@@ -166,7 +179,8 @@ function Gate() {
         <Route path="/users/:user" element={<UserDetail />} />
         <Route path="/departments" element={<Departments />} />
         <Route path="/alerts" element={<Alerts />} />
-        <Route path="/settings" element={<Settings />} />
+        <Route path="/optimization" element={<Optimization />} />
+        <Route path="/settings" element={<SettingsRoute />} />
         <Route path="/setup" element={<Setup />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="*" element={<NotFound />} />

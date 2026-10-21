@@ -125,7 +125,7 @@ export function ConfirmDialog({
               value={typed}
               autoFocus
               autoComplete="off"
-              inputMode="numeric"
+              inputMode={/^\d+$/.test(requireText) ? 'numeric' : 'text'}
               onChange={(e) => setTyped(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {

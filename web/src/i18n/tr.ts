@@ -4,5 +4,6 @@ import * as ui from './tr/ui'
 import * as pages from './tr/pages'
 import * as setup from './tr/setup'
 import { removal } from './tr/removal'
+import { optimization } from './tr/optimization'
 
-export const tr = { ...core, ...ui, ...pages, ...setup, removal }
+export const tr = { ...core, ...ui, ...pages, ...setup, removal, optimization }

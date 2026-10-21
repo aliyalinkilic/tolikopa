@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ChevronsUpDown } from 'lucide-react'
 import { cn } from '@/lib/cn'
@@ -31,6 +31,8 @@ interface DataTableProps<T> {
   className?: string
   /** When set, render one page of rows at a time with a compact pager. Undefined = no pagination. */
   pageSize?: number
+  /** Extra classes for the pager row, e.g. side padding when the table sits flush in a card. */
+  pagerClassName?: string
 }
 
 const alignClass: Record<'left' | 'right' | 'center', string> = {
@@ -49,6 +51,7 @@ export function DataTable<T>({
   maxHeight,
   className,
   pageSize,
+  pagerClassName,
 }: DataTableProps<T>) {
   const t = useT()
   const [sort, setSort] = useState<{ key: string; dir: SortDir } | null>(initialSort ?? null)
@@ -68,10 +71,19 @@ export function DataTable<T>({
     })
   }, [rows, sort, columns])
 
-  // Reset to the first page whenever the data set or sort changes.
+  // Reset to the first page when the *set* of rows changes (a filter) or the sort
+  // changes — not on every refetch. Live queries hand us a new array whenever any
+  // field moves (last seen, online state), and resetting on identity threw the
+  // reader back to page 1 every few seconds.
+  const rowSignature = useMemo(() => rows.map(getRowKey).join('\u0000'), [rows, getRowKey])
+  const signatureRef = useRef(rowSignature)
+  const sortRef = useRef(sort)
   useEffect(() => {
+    if (signatureRef.current === rowSignature && sortRef.current === sort) return
+    signatureRef.current = rowSignature
+    sortRef.current = sort
     setPage(1)
-  }, [rows, sort])
+  }, [rowSignature, sort])
 
   const size = pageSize ?? 0
   const pageCount = size > 0 ? Math.max(1, Math.ceil(sorted.length / size)) : 1
@@ -80,6 +92,20 @@ export function DataTable<T>({
   const showPager = size > 0 && sorted.length > size
   const rangeStart = sorted.length === 0 ? 0 : (safePage - 1) * size + 1
   const rangeEnd = size > 0 ? Math.min(safePage * size, sorted.length) : sorted.length
+
+  // Keep the pager where it is on a short last page: remember how tall a full
+  // page rendered and hold that height as a minimum while paging.
+  const tableRef = useRef<HTMLDivElement>(null)
+  const [fullHeight, setFullHeight] = useState<number | null>(null)
+  const isFullPage = size > 0 && visibleRows.length === size
+  useLayoutEffect(() => {
+    if (!isFullPage || !tableRef.current) return
+    const h = tableRef.current.offsetHeight
+    setFullHeight((prev) => (prev === h ? prev : h))
+  })
+  // Digit-stable widths for the counters, so "9 / 12" → "10 / 12" does not nudge the buttons.
+  const totalDigits = String(sorted.length).length
+  const pageDigits = String(pageCount).length
 
   const toggleSort = (key: string) => {
     setSort((prev) => {
@@ -95,8 +121,12 @@ export function DataTable<T>({
 
   const table = (
     <div
+      ref={tableRef}
       className={cn('overflow-auto rounded-[var(--radius-md)] border border-border', className)}
-      style={maxHeight ? { maxHeight } : undefined}
+      style={{
+        maxHeight,
+        minHeight: showPager && !isFullPage && fullHeight !== null ? Math.min(fullHeight, maxHeight ?? Infinity) : undefined,
+      }}
     >
       <table className="w-full border-collapse text-left text-[13px]">
         <thead className="sticky top-0 z-10">
@@ -183,22 +213,29 @@ export function DataTable<T>({
   return (
     <div className="space-y-3">
       {table}
-      <div className="flex items-center justify-between gap-3 px-1 text-[12px] text-text-muted">
-        <span className="tabular">
+      <div className={cn('flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-1 text-[12px] text-text-muted', pagerClassName)}>
+        <span
+          className="tabular whitespace-nowrap"
+          style={{ minWidth: `${totalDigits * 3 + 4}ch` }}
+          aria-live="polite"
+        >
           {rangeStart}–{rangeEnd} / {sorted.length}
         </span>
-        <div className="flex items-center gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <button
             type="button"
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={safePage <= 1}
             aria-label={t('ui.table.prevPage')}
-            className="inline-flex items-center gap-1 rounded-[9px] border border-border-2 bg-surface/60 px-2.5 py-1 font-medium text-text-muted transition-colors hover:text-text disabled:pointer-events-none disabled:opacity-40 ring-focus"
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-[9px] border border-border-2 bg-surface/60 px-2.5 py-1 font-medium text-text-muted transition-colors hover:text-text disabled:pointer-events-none disabled:opacity-40 ring-focus"
           >
             <ChevronLeft className="size-3.5" aria-hidden />
-            {t('ui.table.prev')}
+            <span className="hidden sm:inline">{t('ui.table.prev')}</span>
           </button>
-          <span className="tabular px-1.5 text-text-dim">
+          <span
+            className="tabular whitespace-nowrap px-1.5 text-center text-text-dim"
+            style={{ minWidth: `${pageDigits * 2 + 3}ch` }}
+          >
             {safePage} / {pageCount}
           </span>
           <button
@@ -206,9 +243,9 @@ export function DataTable<T>({
             onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
             disabled={safePage >= pageCount}
             aria-label={t('ui.table.nextPage')}
-            className="inline-flex items-center gap-1 rounded-[9px] border border-border-2 bg-surface/60 px-2.5 py-1 font-medium text-text-muted transition-colors hover:text-text disabled:pointer-events-none disabled:opacity-40 ring-focus"
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-[9px] border border-border-2 bg-surface/60 px-2.5 py-1 font-medium text-text-muted transition-colors hover:text-text disabled:pointer-events-none disabled:opacity-40 ring-focus"
           >
-            {t('ui.table.next')}
+            <span className="hidden sm:inline">{t('ui.table.next')}</span>
             <ChevronRight className="size-3.5" aria-hidden />
           </button>
         </div>

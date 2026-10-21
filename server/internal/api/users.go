@@ -249,10 +249,16 @@ func (a *API) UserApps(c echo.Context) error {
 	return c.JSON(http.StatusOK, out)
 }
 
-// isSystemCat reports whether a category is OS/system overhead, which we exclude
-// from usage breakdowns so real application usage is legible.
+// isSystemCat reports whether a category is background overhead, which we
+// exclude from usage breakdowns so real application usage is legible: the OS
+// itself, security software (AV/EDR/VPN) and vendor utilities, drivers and
+// updaters — none of them is something a user chose to work in.
 func isSystemCat(name string) bool {
-	return strings.EqualFold(name, "system") || strings.EqualFold(name, "sistem")
+	switch strings.ToLower(name) {
+	case "system", "sistem", "security", "utility":
+		return true
+	}
+	return false
 }
 
 // mergeCategories collapses CategoryShare rows that resolve to the same category

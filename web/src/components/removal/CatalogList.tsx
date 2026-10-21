@@ -20,15 +20,23 @@ interface CatalogListProps {
   onToggle: (kind: RemediationKind, itemId: string, next?: boolean) => void
   onSetMany: (kind: RemediationKind, itemIds: string[], selected: boolean) => void
   disabled?: boolean
+  /** Lock the list to one kind (the Optimization page gives apps and startup
+   *  entries their own tabs). Omitted = the kind switcher is shown. */
+  kind?: RemediationKind
+  title?: string
+  description?: string
 }
 
 type RiskFilter = 'all' | 'safe' | 'review' | 'advanced'
 
 const RISK_FILTERS: RiskFilter[] = ['all', 'safe', 'review', 'advanced']
 
-export function CatalogList({ catalog, isSelected, onToggle, onSetMany, disabled }: CatalogListProps) {
+export function CatalogList({
+  catalog, isSelected, onToggle, onSetMany, disabled, kind: lockedKind, title, description,
+}: CatalogListProps) {
   const t = useT()
-  const [kind, setKind] = useState<RemediationKind>('app')
+  const [chosenKind, setKind] = useState<RemediationKind>('app')
+  const kind = lockedKind ?? chosenKind
   const [query, setQuery] = useState('')
   const [risk, setRisk] = useState<RiskFilter>('all')
   const [onlySelected, setOnlySelected] = useState(false)
@@ -64,23 +72,24 @@ export function CatalogList({ catalog, isSelected, onToggle, onSetMany, disabled
     }),
     [catalog],
   )
-  const safeDefaultTotal = safeDefaults.app.length + safeDefaults.startup.length
+  // A locked list only ever touches its own kind.
+  const kinds: RemediationKind[] = lockedKind ? [lockedKind] : ['app', 'startup']
+  const safeDefaultTotal = kinds.reduce((n, k) => n + safeDefaults[k].length, 0)
+  const selectedTotal = kinds.reduce((n, k) => n + (k === 'app' ? appSelected : startupSelected), 0)
 
   const applySafeDefaults = () => {
-    onSetMany('app', safeDefaults.app, true)
-    onSetMany('startup', safeDefaults.startup, true)
+    for (const k of kinds) onSetMany(k, safeDefaults[k], true)
   }
 
   const clearAll = () => {
-    onSetMany('app', catalog.app.map((i) => i.item_id), false)
-    onSetMany('startup', catalog.startup.map((i) => i.item_id), false)
+    for (const k of kinds) onSetMany(k, catalog[k].map((i) => i.item_id), false)
   }
 
   return (
     <Card padded={false}>
       <CardHeader
-        title={t('removal.catalog.title')}
-        description={t('removal.catalog.body')}
+        title={title ?? t('removal.catalog.title')}
+        description={description ?? t('removal.catalog.body')}
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
@@ -95,7 +104,7 @@ export function CatalogList({ catalog, isSelected, onToggle, onSetMany, disabled
             <Button
               size="sm"
               variant="ghost"
-              disabled={disabled || appSelected + startupSelected === 0}
+              disabled={disabled || selectedTotal === 0}
               leftIcon={<XCircle className="size-4" aria-hidden />}
               onClick={clearAll}
             >
@@ -112,7 +121,7 @@ export function CatalogList({ catalog, isSelected, onToggle, onSetMany, disabled
           role="group"
           aria-label={t('removal.catalog.kindGroup')}
         >
-          {(['app', 'startup'] as RemediationKind[]).map((k) => (
+          {!lockedKind && (['app', 'startup'] as RemediationKind[]).map((k) => (
             <FilterChip
               key={k}
               active={kind === k}
@@ -123,7 +132,7 @@ export function CatalogList({ catalog, isSelected, onToggle, onSetMany, disabled
               {removalKindPlural(k)}
             </FilterChip>
           ))}
-          <span className="ml-1 text-[12px] text-text-dim">
+          <span className={lockedKind ? 'text-[12px] text-text-dim' : 'ml-1 text-[12px] text-text-dim'}>
             {kind === 'app'
               ? t('removal.catalog.appSummary', { total: catalog.app.length, selected: appSelected })
               : t('removal.catalog.startupSummary', { total: catalog.startup.length, selected: startupSelected })}

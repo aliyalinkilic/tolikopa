@@ -117,6 +117,33 @@ export interface GeneralSettings {
   org_name: string
   default_lang: LangSetting
   require_2fa: boolean
+  /** Office schedule; machines with one of its tags only raise offline alerts inside it. */
+  work_hours: WorkHours
+}
+
+/** app_setting "work_hours" (docs/API.md §6). Wall-clock times in `timezone` (Europe/Istanbul). */
+export interface WorkHours {
+  /** ISO weekdays: 1 = Monday … 7 = Sunday. */
+  days: number[]
+  /** "HH:MM", inclusive. */
+  start: string
+  /** "HH:MM", exclusive; after start. */
+  end: string
+  /** Machine tags marking work-hours-only devices (case-insensitive). */
+  tags: string[]
+  /** No new offline alert in the first/last this-many minutes of the day. */
+  grace_minutes: number
+  /** Minimum offline time before a work-hours device alerts. */
+  offline_after_minutes: number
+  /** Whole missed work days (1–30) after which a work-hours device gets one long-lived info "stale" alert. */
+  stale_after_days: number
+  /** Read-only, always "Europe/Istanbul". */
+  timezone?: string
+}
+
+/** PUT /api/admin/settings/general: omitted fields keep their value; work_hours replaces the schedule. */
+export type GeneralSettingsUpdate = Partial<Omit<GeneralSettings, 'work_hours'>> & {
+  work_hours?: Omit<WorkHours, 'timezone'>
 }
 
 export interface TotpSetup {
@@ -296,6 +323,41 @@ export interface HourlyActivityCell {
 export interface HourlyActivityResponse {
   days: number
   cells: HourlyActivityCell[]
+}
+
+// GET /api/stats/fleet-trend — fleet-wide counts + averages per bucket
+// (metric_5m re-bucketed in Europe/Istanbul; archived machines excluded).
+export type FleetTrendRange = '24h' | '7d'
+
+export interface FleetTrendPoint {
+  ts: string
+  /** Distinct machines reporting in the bucket. */
+  online: number
+  /** Distinct non-Linux machines with an active session in the bucket. */
+  active: number
+  /** Percent 0..100. */
+  cpu_avg: number
+  /** Ratio 0..1. */
+  mem_ratio_avg: number
+}
+
+export interface FleetTrendStat {
+  current: number
+  avg: number
+  peak: number
+}
+
+export interface FleetTrendResponse {
+  range: FleetTrendRange
+  bucket_seconds: number
+  generated_at: string
+  points: FleetTrendPoint[]
+  summary: {
+    online: FleetTrendStat
+    active: FleetTrendStat
+    cpu_avg: FleetTrendStat
+    mem_ratio_avg: FleetTrendStat
+  }
 }
 
 export type TopAppsRange = '24h' | '7d' | '30d'
@@ -544,7 +606,12 @@ export interface AlertDTO {
   opened_at: string
   last_seen_at: string
   resolved_at?: string | null
+  acked_at?: string | null
   detail?: Record<string, unknown>
+  /** The machine's tags at read time. */
+  machine_tags?: string[]
+  /** The machine is a work-hours-only device under the current schedule (GET /api/alerts). */
+  work_hours?: boolean
 }
 
 export interface EventDTO {
@@ -564,11 +631,41 @@ export interface CategoryRule {
   match_value: string
   priority: number
   enabled: boolean
+  // Read-only (GET fills them; create/update ignore them).
+  /** Shipped by a seed migration and not edited since. */
+  builtin?: boolean
+  /** Samples this rule was the winning match for over the last 7 days. */
+  samples?: number
+  machines?: number
+  last_seen?: string | null
 }
 
 export interface UnclassifiedProcess {
   name: string
   count: number
+  machines: number
+  cpu_avg: number
+  /** 0..1 of all process CPU in the window. */
+  cpu_share: number
+  last_seen: string
+}
+
+export type UnclassifiedSort = 'machines' | 'cpu' | 'count'
+
+export interface CategoryTestMatch {
+  id: number
+  category: string
+  match_type: string
+  match_value: string
+  priority: number
+}
+
+export interface CategoryTestResult {
+  /** The normalised name the rules see. */
+  name: string
+  category?: string
+  /** Resolution order: the first wins, the rest are shadowed. */
+  matches: CategoryTestMatch[]
 }
 
 export interface AlertRuleDTO {
@@ -577,6 +674,23 @@ export interface AlertRuleDTO {
   warn_threshold: number | null
   crit_threshold: number | null
   for_seconds: number
+  /** crash_storm only: process base names (lower-case, no ".exe") whose crashes
+   *  never count. Omitted on PUT = keep the stored list. */
+  ignore_apps?: string[]
+}
+
+/** GET /api/admin/crash-apps: faulting processes behind recent crash events. */
+export interface CrashAppDTO {
+  app: string
+  crashes: number
+  machines: number
+  /** Already in crash_storm ignore_apps. */
+  ignored: boolean
+}
+
+export interface CrashAppsResponse {
+  window_seconds: number
+  apps: CrashAppDTO[]
 }
 
 export interface PanelUser {
@@ -643,6 +757,10 @@ export interface RemediationCatalogItem {
   present_count?: number | null
   /** Machines that reported presence for this item at all (the denominator). */
   reported_count?: number | null
+  /** startup only: machines where the entry is present AND still runs at sign-in.
+   *  A disabled entry stays present (its Run value is never deleted). Absent on
+   *  older servers; null while nobody has reported. */
+  enabled_count?: number | null
 }
 
 export interface RemediationCatalogGroups {
@@ -696,6 +814,10 @@ export interface RemediationPosture {
   /** Kill switch detail, when the server breaks it down. */
   apps_not_allowed: number
   startup_not_allowed: number
+  /** enforce_actions known off (dry-run only). 0 on servers before migration 0020. */
+  enforce_off: number
+  /** Reporting machines whose three switches are not known separately yet. */
+  switches_unknown: number
   /** True once at least one dry-run attempt has been recorded. Gates enforce mode. */
   dry_run_observed: boolean
   last_dry_run_at?: string | null
@@ -725,6 +847,9 @@ export interface RemediationAttemptDTO {
   outcome: RemediationOutcome | string
   error_code?: string
   duration_ms?: number
+  /** The machine was permanently deleted; the attempt is kept as audit trail and
+   *  `hostname` comes from the purge audit row. */
+  machine_deleted?: boolean
   /** failed/timeout/blocked rows only: a later attempt converged, or the machine
    *  now reports the item absent. Absent on older servers. */
   resolved?: boolean
@@ -849,6 +974,89 @@ export interface MachineRemediation {
   attempts: RemediationAttemptDTO[]
 }
 
+// ── Optimization page (GET /api/admin/remediation/posture) ──────────────────────
+// Read-only roll-up. Mirrors model.RemediationPostureResponse.
+
+export interface RemediationPlatformSummary {
+  /** Machine kind — "windows" | "linux" (open-ended on the wire). */
+  kind: string
+  machines: number
+  reporting: number
+  allow_apps: number
+  allow_startup: number
+  enforce: number
+  /** enforce AND (apps OR startup) — the machine can act at all. */
+  actuating: number
+}
+
+export interface RemediationItemProgress {
+  kind: RemediationKind
+  item_id: string
+  display_name?: string
+  selected: boolean
+  /** Targeted machines where it is still present (app) / still enabled (startup). */
+  pending: number
+  converged: number
+  dry_run: number
+  open_failures: number
+}
+
+export interface RemediationMachinePosture {
+  machine_id: string
+  hostname: string
+  tags: string[]
+  excluded: boolean
+  reported_at?: string | null
+  /** Local GPO switches; null = not reported since the server began storing them. */
+  allow_apps: boolean | null
+  allow_startup: boolean | null
+  enforce: boolean | null
+  allowed: boolean | null
+  catalog_stale: boolean
+  policy_current: boolean
+  pending_apps: number
+  pending_startup: number
+  open_failures: number
+  last_attempt_at?: string | null
+}
+
+export type LinuxAdviceKey =
+  | 'smart' | 'disk_critical' | 'disk_low' | 'mem_pressure' | 'cpu_sustained' | 'long_uptime'
+
+export interface LinuxAdvice {
+  key: LinuxAdviceKey | string
+  severity: 'warn' | 'crit' | string
+  value: number
+}
+
+/** ADVISORY ONLY — the Linux agent has no actuation backend. */
+export interface LinuxAdvisoryMachine {
+  machine_id: string
+  hostname: string
+  online: boolean
+  last_seen: string
+  cpu_avg: number | null
+  mem_ratio_avg: number | null
+  mem_total: number
+  disk_mount?: string
+  disk_used_pct: number | null
+  disk_free_bytes: number
+  uptime_days: number
+  smart_bad: boolean
+  sample_hours: number
+  advice: LinuxAdvice[]
+}
+
+export interface RemediationPostureResponse {
+  generated_at: string
+  catalog_version: string
+  policy_revision: number
+  platforms: RemediationPlatformSummary[]
+  items: RemediationItemProgress[]
+  machines: RemediationMachinePosture[]
+  linux: LinuxAdvisoryMachine[]
+}
+
 // ── WebSocket envelope ─────────────────────────────────────────────────────────
 export interface MachineMetricPush {
   machine_id: string
@@ -882,4 +1090,9 @@ export interface ArchivedMachinesResponse {
 
 export interface MachineArchiveResult {
   changed: number
+}
+
+/** POST /api/admin/machines/purge — machines actually deleted. */
+export interface MachinePurgeResult {
+  purged: number
 }

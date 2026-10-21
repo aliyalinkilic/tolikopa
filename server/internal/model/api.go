@@ -77,6 +77,32 @@ type GeneralSettings struct {
 	// Require2FA forces every panel account (admin and viewer) to enrol in
 	// two-factor before it can use anything but the enrolment endpoints.
 	Require2FA bool `json:"require_2fa"`
+	// WorkHours is the office schedule; machines carrying one of its tags only
+	// raise presence alerts (offline) inside it. See docs/API.md §6.
+	WorkHours WorkHours `json:"work_hours"`
+}
+
+// WorkHours is app_setting "work_hours". Times are wall-clock in Timezone
+// (always Europe/Istanbul; read-only, echoed for the client). No holidays yet.
+type WorkHours struct {
+	// Days are ISO weekdays: 1 = Monday … 7 = Sunday.
+	Days  []int  `json:"days"`
+	Start string `json:"start"` // "HH:MM", inclusive
+	End   string `json:"end"`   // "HH:MM", exclusive; must be after Start
+	// Tags are machine tags (machine.tags) that mark work-hours-only devices,
+	// matched case-insensitively. Machines without one keep 24/7 alerting.
+	Tags []string `json:"tags"`
+	// GraceMinutes: no NEW offline alert opens during the first and the last
+	// GraceMinutes of the day (morning boot-up, early leavers).
+	GraceMinutes int `json:"grace_minutes"`
+	// OfflineAfterMinutes is the minimum offline time before a work-hours device
+	// alerts (the offline rule's warn threshold applies if it is longer).
+	OfflineAfterMinutes int `json:"offline_after_minutes"`
+	// StaleAfterDays: a work-hours device that has missed this many whole work
+	// days (not seen at all during them) gets one long-lived info "stale" offline
+	// alert instead of a fresh offline alert every workday.
+	StaleAfterDays int    `json:"stale_after_days"`
+	Timezone       string `json:"timezone"`
 }
 
 // PublicSettings is served without authentication (the login page needs it).
@@ -333,6 +359,39 @@ type HourlyActivityCell struct {
 	Samples       int64 `json:"samples"` // total vitals samples observed in the cell
 }
 
+// FleetTrendResponse is the fleet health trend (GET /api/stats/fleet-trend):
+// per-bucket online / in-use device counts and average CPU / RAM, from metric_5m
+// re-bucketed in Europe/Istanbul. Archived machines are excluded.
+type FleetTrendResponse struct {
+	Range         string            `json:"range"`          // "24h" | "7d"
+	BucketSeconds int               `json:"bucket_seconds"` // 900 (24h) | 3600 (7d)
+	GeneratedAt   time.Time         `json:"generated_at"`
+	Points        []FleetTrendPoint `json:"points"`
+	Summary       FleetTrendSummary `json:"summary"`
+}
+
+type FleetTrendPoint struct {
+	TS          time.Time `json:"ts"`            // bucket start (UTC instant of a local bucket)
+	Online      int       `json:"online"`        // distinct machines reporting in the bucket
+	Active      int       `json:"active"`        // distinct non-Linux machines with an active session
+	CPUAvg      float64   `json:"cpu_avg"`       // percent 0..100
+	MemRatioAvg float64   `json:"mem_ratio_avg"` // ratio 0..1
+}
+
+// FleetTrendSummary: current = latest bucket; avg/peak over all returned buckets.
+type FleetTrendSummary struct {
+	Online      FleetTrendStat `json:"online"`
+	Active      FleetTrendStat `json:"active"`
+	CPUAvg      FleetTrendStat `json:"cpu_avg"`
+	MemRatioAvg FleetTrendStat `json:"mem_ratio_avg"`
+}
+
+type FleetTrendStat struct {
+	Current float64 `json:"current"`
+	Avg     float64 `json:"avg"`
+	Peak    float64 `json:"peak"`
+}
+
 // TopAppsResponse ranks fleet-wide application consumption (proc_name_1h,
 // LEFT-joined with app-focus rollups for foreground seconds).
 type TopAppsResponse struct {
@@ -402,10 +461,10 @@ type MachineDetail struct {
 	// page still opens (history is kept) and offers "unarchive".
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 	ArchivedBy string     `json:"archived_by,omitempty"`
-	OS       string `json:"os,omitempty"`
-	OSBuild  string `json:"os_build,omitempty"`
-	CPUModel string `json:"cpu_model,omitempty"`
-	CPUCores int    `json:"cpu_cores,omitempty"`
+	OS         string     `json:"os,omitempty"`
+	OSBuild    string     `json:"os_build,omitempty"`
+	CPUModel   string     `json:"cpu_model,omitempty"`
+	CPUCores   int        `json:"cpu_cores,omitempty"`
 	// IPAddrs: agent-reported own LAN IPv4 addresses (empty for agents < 1.7).
 	IPAddrs []string `json:"ip_addrs"`
 	// LastIP: source address of the last ingest request — the fallback witness.
@@ -561,19 +620,25 @@ type UserLogon struct {
 
 // ── Alerts / events ────────────────────────────────────────────────────────────
 type AlertDTO struct {
-	ID         int64          `json:"id"`
-	MachineID  string         `json:"machine_id"`
-	Hostname   string         `json:"hostname,omitempty"`
-	Rule       string         `json:"rule"`
-	Severity   string         `json:"severity"`
-	Status     string         `json:"status"`
-	Value      *float64       `json:"value,omitempty"`
+	ID        int64    `json:"id"`
+	MachineID string   `json:"machine_id"`
+	Hostname  string   `json:"hostname,omitempty"`
+	Rule      string   `json:"rule"`
+	Severity  string   `json:"severity"`
+	Status    string   `json:"status"`
+	Value     *float64 `json:"value,omitempty"`
 	// Message is a pre-rendered fallback (the instance default language at the
 	// time the alert was last evaluated). Clients localise from Rule + Params.
 	Message    string     `json:"message"`
 	OpenedAt   time.Time  `json:"opened_at"`
 	LastSeenAt time.Time  `json:"last_seen_at"`
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	AckedAt    *time.Time `json:"acked_at,omitempty"`
+	// MachineTags are the machine's tags (machine.tags) at read time.
+	MachineTags []string `json:"machine_tags"`
+	// WorkHours: the machine is a work-hours-only device under the current
+	// schedule (set by GET /api/alerts only; false elsewhere).
+	WorkHours bool `json:"work_hours,omitempty"`
 	// Params holds every value the rule's message interpolates (docs/API.md §6).
 	// Always an object, never null.
 	Params map[string]any `json:"params"`
@@ -591,6 +656,9 @@ type EventDTO struct {
 }
 
 // ── Admin: classification + rules ──────────────────────────────────────────────
+// CategoryRule is one process_category row. The last four fields are read-only
+// (GET /admin/categories fills them; create/update accept and ignore them so the
+// panel can send back a rule exactly as it received it).
 type CategoryRule struct {
 	ID         int    `json:"id"`
 	Category   string `json:"category"`
@@ -598,11 +666,42 @@ type CategoryRule struct {
 	MatchValue string `json:"match_value"`
 	Priority   int    `json:"priority"`
 	Enabled    bool   `json:"enabled"`
+	// Builtin: shipped by a seed migration and not edited since. Any admin edit
+	// clears it, and later migrations only ever touch rules that still carry it.
+	Builtin bool `json:"builtin"`
+	// Samples / Machines / LastSeen: how often this rule was the winning match
+	// over the stats window (proc_cat_1h, default 7 days). Zero = never matched.
+	Samples  int64      `json:"samples"`
+	Machines int64      `json:"machines"`
+	LastSeen *time.Time `json:"last_seen"`
 }
 
+// UnclassifiedProcess is a process name no rule matched in the window, with
+// enough weight to classify the most impactful names first.
 type UnclassifiedProcess struct {
-	Name  string `json:"name"`
-	Count int64  `json:"count"`
+	Name     string    `json:"name"`
+	Count    int64     `json:"count"`     // process samples
+	Machines int64     `json:"machines"`  // distinct machines it ran on
+	CPUAvg   float64   `json:"cpu_avg"`   // mean cpu_pct per sample
+	CPUShare float64   `json:"cpu_share"` // 0..1 of all process CPU in the window
+	LastSeen time.Time `json:"last_seen"`
+}
+
+// CategoryTestResult answers GET /admin/categories/test?name=…: which rule a
+// process name resolves to now. Matches is in resolution order — the first
+// entry wins, the rest are shadowed.
+type CategoryTestResult struct {
+	Name     string              `json:"name"` // normalised form the rules see
+	Category string              `json:"category,omitempty"`
+	Matches  []CategoryTestMatch `json:"matches"`
+}
+
+type CategoryTestMatch struct {
+	ID         int    `json:"id"`
+	Category   string `json:"category"`
+	MatchType  string `json:"match_type"`
+	MatchValue string `json:"match_value"`
+	Priority   int    `json:"priority"`
 }
 
 type AlertRuleDTO struct {
@@ -611,6 +710,24 @@ type AlertRuleDTO struct {
 	WarnThreshold *float64 `json:"warn_threshold"`
 	CritThreshold *float64 `json:"crit_threshold"`
 	ForSeconds    int      `json:"for_seconds"`
+	// IgnoreApps is crash_storm only (params.ignore_apps): process base names,
+	// lower-case without ".exe", whose crashes never count toward a storm. GET
+	// always returns it (possibly []) for crash_storm and omits it elsewhere; on
+	// PUT an omitted field keeps the stored list.
+	IgnoreApps *[]string `json:"ignore_apps,omitempty"`
+}
+
+// CrashAppDTO is one faulting process in GET /api/admin/crash-apps.
+type CrashAppDTO struct {
+	App      string `json:"app"`      // base name, lower-case, without ".exe"
+	Crashes  int    `json:"crashes"`  // app_crash + app_hang events in the window
+	Machines int    `json:"machines"` // distinct (non-archived) machines
+	Ignored  bool   `json:"ignored"`  // already in crash_storm ignore_apps
+}
+
+type CrashAppsResponse struct {
+	WindowSeconds int           `json:"window_seconds"`
+	Apps          []CrashAppDTO `json:"apps"`
 }
 
 // ── Admin: endpoint hygiene (remediation) ──────────────────────────────────────
@@ -658,6 +775,11 @@ type RemediationCatalogItem struct {
 	// Agents scan their whole compiled catalog and report only what is present,
 	// so every reporting machine counts for every item.
 	ReportedCount int `json:"reported_count"`
+	// EnabledCount (startup only): machines where the entry is present AND still
+	// runs at logon. A disabled entry stays "present" (the Run value is never
+	// deleted), so present_count alone over-counts what is left to do. Same null
+	// rule as PresentCount.
+	EnabledCount *int `json:"enabled_count,omitempty"`
 }
 
 // RemediationPolicyDTO is the stored fleet-wide policy. Enabled=false and
@@ -695,6 +817,13 @@ type RemediationFleetSummary struct {
 	CatalogStale  int `json:"catalog_stale"`   // reported catalog_version != server's
 	PolicyCurrent int `json:"policy_current"`  // already applied the current revision
 	KillSwitchOff int `json:"kill_switch_off"` // local GPO switch forbids actuation
+	// Per-switch break-down (0020). Counted among reporting machines whose switch
+	// is known to be OFF; SwitchesUnknown = reporting machines that have not sent
+	// a report since the server started storing the three switches separately.
+	AppsNotAllowed    int `json:"apps_not_allowed"`
+	StartupNotAllowed int `json:"startup_not_allowed"`
+	EnforceOff        int `json:"enforce_off"`
+	SwitchesUnknown   int `json:"switches_unknown"`
 }
 
 // RemediationAttemptDTO is one audited action for the admin feed.
@@ -713,6 +842,9 @@ type RemediationAttemptDTO struct {
 	// Resolved is set on failed/timeout/blocked rows only: true when a LATER attempt
 	// converged (ok / not_present) or the machine now reports the item absent.
 	Resolved *bool `json:"resolved,omitempty"`
+	// MachineDeleted is true when the machine was permanently deleted (purged):
+	// the attempt stays as audit trail, Hostname comes from the purge audit row.
+	MachineDeleted bool `json:"machine_deleted,omitempty"`
 }
 
 type RemediationAttemptsResponse struct {
@@ -723,13 +855,13 @@ type RemediationAttemptsResponse struct {
 // failures: machines whose latest actuation attempt for the item did not converge
 // and which still report the item present (or have not reported since).
 type RemediationFailureGroup struct {
-	Kind        string    `json:"kind"`
-	ItemID      string    `json:"item_id"`
-	DisplayName string    `json:"display_name,omitempty"`
-	Outcome     string    `json:"outcome"`
-	ErrorCode   string    `json:"error_code,omitempty"`
-	Machines    int       `json:"machines"`
-	Hostnames   []string  `json:"hostnames"` // first few, for the panel; full list via /attempts
+	Kind        string   `json:"kind"`
+	ItemID      string   `json:"item_id"`
+	DisplayName string   `json:"display_name,omitempty"`
+	Outcome     string   `json:"outcome"`
+	ErrorCode   string   `json:"error_code,omitempty"`
+	Machines    int      `json:"machines"`
+	Hostnames   []string `json:"hostnames"` // first few, for the panel; full list via /attempts
 	// StaleAgents counts the group's machines whose agent is behind
 	// LatestAgentVersion. A failure there is the old agent's until proven otherwise.
 	StaleAgents int       `json:"stale_agents"`
@@ -799,6 +931,98 @@ type RemediationImpactResponse struct {
 	Items           []RemediationImpactItem    `json:"items"`
 }
 
+// RemediationPostureResponse — GET /api/admin/remediation/posture: the
+// Optimization page's fleet roll-up. Read-only; every number is derived from
+// data the hygiene report and the inventory already hold.
+type RemediationPostureResponse struct {
+	GeneratedAt    time.Time `json:"generated_at"`
+	CatalogVersion string    `json:"catalog_version"`
+	PolicyRevision int64     `json:"policy_revision"`
+	// Platforms: one entry per machine kind present in the inventory ("windows",
+	// "linux", …). Hygiene counters are zero for kinds whose agent has no backend.
+	Platforms []RemediationPlatformSummary `json:"platforms"`
+	// Items: per catalog item, how far the fleet is from the saved policy.
+	Items []RemediationItemProgress `json:"items"`
+	// Machines: every non-archived Windows machine with its hygiene posture.
+	Machines []RemediationMachinePosture `json:"machines"`
+	// Linux: ADVISORY ONLY. The Linux agent has no hygiene backend and cannot act
+	// on anything; these are recommendations derived from metrics it already sends
+	// (CPU / RAM / disk gauges, SMART, boot time). Nothing is ever pushed to a host.
+	Linux []LinuxAdvisoryMachine `json:"linux"`
+}
+
+// LinuxAdvisoryMachine is one Linux host with the measurements behind its advice.
+type LinuxAdvisoryMachine struct {
+	MachineID     string        `json:"machine_id"`
+	Hostname      string        `json:"hostname"`
+	Online        bool          `json:"online"`
+	LastSeen      time.Time     `json:"last_seen"`
+	CPUAvg        *float64      `json:"cpu_avg"`       // % over the advisory window (metric_1h)
+	MemRatioAvg   *float64      `json:"mem_ratio_avg"` // 0..1
+	MemTotal      int64         `json:"mem_total"`     // bytes, 0 = unknown
+	DiskMount     string        `json:"disk_mount,omitempty"`
+	DiskUsedPct   *float64      `json:"disk_used_pct"` // fullest mount, latest sample
+	DiskFreeBytes int64         `json:"disk_free_bytes"`
+	UptimeDays    float64       `json:"uptime_days"`
+	SMARTBad      bool          `json:"smart_bad"`
+	SampleHours   int           `json:"sample_hours"`
+	Advice        []LinuxAdvice `json:"advice"`
+}
+
+// LinuxAdvice is one recommendation. Key: disk_critical | disk_low |
+// mem_pressure | cpu_sustained | smart | long_uptime. The panel words it.
+type LinuxAdvice struct {
+	Key      string  `json:"key"`
+	Severity string  `json:"severity"` // warn | crit
+	Value    float64 `json:"value"`    // the measurement that triggered it
+}
+
+type RemediationPlatformSummary struct {
+	Kind      string `json:"kind"`
+	Machines  int    `json:"machines"`
+	Reporting int    `json:"reporting"` // sent a hygiene report at all
+	// Hygiene switches, counted among reporting machines whose switch is known ON.
+	AllowApps    int `json:"allow_apps"`
+	AllowStartup int `json:"allow_startup"`
+	Enforce      int `json:"enforce"`
+	Actuating    int `json:"actuating"` // remediation_allowed: enforce AND (apps OR startup)
+}
+
+type RemediationItemProgress struct {
+	Kind        string `json:"kind"`
+	ItemID      string `json:"item_id"`
+	DisplayName string `json:"display_name,omitempty"`
+	Selected    bool   `json:"selected"`
+	// Pending: TARGETED machines (not tag-excluded) where the item is still
+	// present (apps) or still enabled at logon (startup).
+	Pending int `json:"pending"`
+	// Converged: machines with an "ok" or "not_present" attempt in the 90-day
+	// window that no longer have it present/enabled.
+	Converged    int `json:"converged"`
+	DryRun       int `json:"dry_run"`       // machines with a dry_run attempt in the window
+	OpenFailures int `json:"open_failures"` // see GET /remediation/failures
+}
+
+type RemediationMachinePosture struct {
+	MachineID  string     `json:"machine_id"`
+	Hostname   string     `json:"hostname"`
+	Tags       []string   `json:"tags"`
+	Excluded   bool       `json:"excluded"` // carries one of policy.excluded_tags
+	ReportedAt *time.Time `json:"reported_at,omitempty"`
+	// Local switches; nil = not reported since 0020 (or never).
+	AllowApps     *bool `json:"allow_apps"`
+	AllowStartup  *bool `json:"allow_startup"`
+	Enforce       *bool `json:"enforce"`
+	Allowed       *bool `json:"allowed"` // the collapsed flag (also set by pre-0020 reports)
+	CatalogStale  bool  `json:"catalog_stale"`
+	PolicyCurrent bool  `json:"policy_current"`
+	// PendingApps / PendingStartup: selected items still present / still enabled.
+	PendingApps    int        `json:"pending_apps"`
+	PendingStartup int        `json:"pending_startup"`
+	OpenFailures   int        `json:"open_failures"`
+	LastAttemptAt  *time.Time `json:"last_attempt_at,omitempty"`
+}
+
 // MachineRemediation is GET /api/machines/{id}/remediation: what this machine
 // still has from the ALLOWLIST (never a software inventory) plus its recent
 // attempts.
@@ -855,6 +1079,13 @@ type MachineArchiveRequest struct {
 // ids that were unknown or already in the target state are simply not counted.
 type MachineArchiveResult struct {
 	Changed int `json:"changed"`
+}
+
+// MachinePurgeResult — POST /api/admin/machines/purge (body: MachineArchiveRequest).
+// Purged counts the machines actually deleted; ids that no longer exist (already
+// purged by a double click or another tab) are not counted.
+type MachinePurgeResult struct {
+	Purged int `json:"purged"`
 }
 
 // ArchivedMachine — one row of GET /api/admin/machines/archived.

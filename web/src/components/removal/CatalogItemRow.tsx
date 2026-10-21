@@ -24,6 +24,11 @@ export function CatalogItemRow({ item, selected, onToggle, disabled }: CatalogIt
   const scope = removalScopeLabel(item.scope)
   const presence = presenceLabel(item)
   const unknownPresence = item.present_count === null || item.present_count === undefined
+  // Startup entries: a disabled entry is still "present" (its Run value is never
+  // deleted), so the headline is the ENABLED count when the server sends it.
+  const enabledKnown = item.kind === 'startup' && typeof item.enabled_count === 'number'
+  const headline = enabledKnown ? (item.enabled_count ?? 0) : (item.present_count ?? 0)
+  const disabledCount = enabledKnown ? Math.max(0, (item.present_count ?? 0) - (item.enabled_count ?? 0)) : 0
 
   return (
     <li
@@ -79,10 +84,15 @@ export function CatalogItemRow({ item, selected, onToggle, disabled }: CatalogIt
             <span className="text-[12px] text-text-dim">{t('removal.presence.unknown')}</span>
           ) : (
             <>
-              <span className="tabular block text-[15px] font-semibold text-text">{item.present_count}</span>
+              <span className="tabular block text-[15px] font-semibold text-text">{headline}</span>
               <span className="block text-[11px] text-text-dim">
-                {t(item.kind === 'startup' ? 'removal.presence.startupUnit' : 'removal.presence.appUnit', { count: item.present_count ?? 0 })}
+                {t(item.kind === 'startup' ? 'removal.presence.startupUnit' : 'removal.presence.appUnit', { count: headline })}
               </span>
+              {disabledCount > 0 && (
+                <span className="tabular block text-[11px] text-ok">
+                  {t('optimization.startup.disabledOn', { count: disabledCount })}
+                </span>
+              )}
               {typeof item.reported_count === 'number' && item.reported_count > 0 && (
                 <span
                   className="mt-1.5 block h-1 overflow-hidden rounded-full bg-wash-2"
@@ -92,7 +102,7 @@ export function CatalogItemRow({ item, selected, onToggle, disabled }: CatalogIt
                   <span
                     className="block h-full rounded-full bg-accent/70"
                     style={{
-                      width: `${Math.min(100, Math.round(((item.present_count ?? 0) / item.reported_count) * 100))}%`,
+                      width: `${Math.min(100, Math.round((headline / item.reported_count) * 100))}%`,
                     }}
                   />
                 </span>

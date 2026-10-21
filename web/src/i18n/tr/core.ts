@@ -91,10 +91,11 @@ export const format = {
 export const nav = {
   overview: 'Panel',
   devices: 'Cihazlar',
-  slowMachines: 'Yavaş Makineler',
+  slowMachines: 'Yavaş Cihazlar',
   users: 'Kullanıcılar',
   departments: 'Departmanlar',
   alerts: 'Alarmlar',
+  optimization: 'Optimizasyon',
   settings: 'Ayarlar',
   setup: 'Kurulum',
   profile: 'Profil',
@@ -170,6 +171,7 @@ export const errors = {
   unsupported_media_type: 'İstek biçimi desteklenmiyor.',
   category_rule_conflict: 'Aynı eşleşme türü ve değeriyle bir kural zaten var.',
   too_many_items: 'Tek istekte çok fazla öğe seçildi.',
+  machine_not_archived: 'Yalnızca arşivdeki makineler kalıcı olarak silinebilir. Listeyi yenileyip yeniden deneyin.',
   too_many_itemsMax: 'Tek istekte en çok {max} öğe işlenebilir.',
   dry_run_required: 'Önce deneme modunda çalıştırıp en az bir sonuç gözlemleyin.',
   unknown_catalog_item: 'Seçilen öğe katalogda yok. Sayfayı yenileyip yeniden deneyin.',
@@ -193,6 +195,9 @@ export const category = {
   dev: 'Geliştirme',
   media: 'Medya',
   comms: 'İletişim',
+  remote: 'Uzaktan Erişim',
+  security: 'Güvenlik',
+  utility: 'Sürücü ve Araçlar',
   system: 'Sistem',
   other: 'Diğer',
 }
@@ -239,7 +244,7 @@ export const rule = {
 
 // What each rule's thresholds measure — shown under the rule name in Settings.
 export const ruleHelp = {
-  offline: 'Makinenin görülmediği süre (saniye).',
+  offline: 'Makinenin görülmediği süre (saniye). Mesai saatli makinelerde yalnızca mesai içinde: bugün hiç açılmadıysa Bilgi, gün içinde kapandıysa Uyarı; uzun süredir sessizse tek bir kalıcı Bilgi alarmı.',
   cpu_high: 'Süre boyunca ortalama CPU kullanımı (%).',
   mem_high: 'Süre boyunca ortalama bellek kullanımı (%).',
   ram_high: 'Süre boyunca ortalama bellek kullanımı (%).',
@@ -256,6 +261,11 @@ export const ruleHelp = {
 export const alertText = {
   offline: '{host} çevrimdışı ({duration} görülmedi)',
   offlineBare: '{host} çevrimdışı',
+  offlineNotStarted: '{host} bugün hiç açılmadı',
+  offlineWentOffline: '{host} gün içinde çevrimdışı oldu ({duration} görülmedi)',
+  offlineWentOfflineBare: '{host} gün içinde çevrimdışı oldu',
+  offlineStale: '{host} uzun süredir sessiz ({duration} görülmedi) — kullanılmıyorsa arşivleyin',
+  offlineStaleBare: '{host} uzun süredir sessiz — kullanılmıyorsa arşivleyin',
   cpu_high: '{host} üzerinde CPU kullanımı yüksek: {value}',
   cpu_highBare: '{host} üzerinde CPU kullanımı yüksek',
   mem_high: '{host} üzerinde bellek kullanımı yüksek: {value}',
@@ -266,6 +276,7 @@ export const alertText = {
   smart_fail: '{host} {disk} diski SMART hatası bildiriyor',
   smart_failBare: '{host} üzerinde bir disk SMART hatası bildiriyor',
   crash_storm: '{host} son {duration} içinde {count} kez çöktü',
+  crash_stormApp: '{host} üzerinde {app} son {duration} içinde {count} kez çöktü',
   crash_stormNoWindow: '{host} üzerinde {count} uygulama çökmesi',
   crash_stormBare: '{host} üzerinde sık uygulama çökmesi',
   net_high: '{host} üzerinde ağ trafiği yüksek: {value}',

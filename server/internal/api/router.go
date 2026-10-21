@@ -85,12 +85,14 @@ func (a *API) Router() *echo.Echo {
 	sec.GET("/stats/hourly-activity", a.StatsHourlyActivity)
 	sec.GET("/stats/top-apps", a.StatsTopApps)
 	sec.GET("/stats/slow-machines", a.SlowMachines)
+	sec.GET("/stats/fleet-trend", a.StatsFleetTrend)
 	// /api/v1 aliases (the dashboard contract names them under v1; same handlers,
 	// same cookie auth — /api/v1 otherwise carries only the agent ingest route).
 	sec.GET("/v1/fleet/overview", a.FleetOverview)
 	sec.GET("/v1/stats/hourly-activity", a.StatsHourlyActivity)
 	sec.GET("/v1/stats/top-apps", a.StatsTopApps)
 	sec.GET("/v1/stats/slow-machines", a.SlowMachines)
+	sec.GET("/v1/stats/fleet-trend", a.StatsFleetTrend)
 
 	sec.GET("/machines/:id", a.MachineDetail)
 	sec.GET("/machines/:id/metrics", a.MachineMetrics)
@@ -122,8 +124,10 @@ func (a *API) Router() *echo.Echo {
 	adm.PUT("/machines/:id/labels", a.PutMachineLabels)
 	adm.POST("/machines/archive", a.ArchiveMachines)
 	adm.POST("/machines/restore", a.RestoreMachines)
+	adm.POST("/machines/purge", a.PurgeMachines)
 	adm.GET("/machines/archived", a.ArchivedMachines)
 	adm.GET("/categories", a.ListCategories)
+	adm.GET("/categories/test", a.TestCategory)
 	adm.POST("/categories", a.CreateCategory)
 	adm.PUT("/categories/:id", a.UpdateCategory)
 	adm.DELETE("/categories/:id", a.DeleteCategory)
@@ -131,6 +135,7 @@ func (a *API) Router() *echo.Echo {
 	adm.POST("/reclassify", a.Reclassify)
 	adm.GET("/alert-rules", a.GetAlertRules)
 	adm.PUT("/alert-rules", a.PutAlertRules)
+	adm.GET("/crash-apps", a.CrashApps)
 	// Panel accounts (who may sign in here).
 	adm.GET("/panel-users", a.ListPanelUsers)
 	adm.POST("/panel-users", a.CreatePanelUser)
@@ -159,6 +164,7 @@ func (a *API) Router() *echo.Echo {
 	adm.GET("/remediation/attempts", a.GetRemediationAttempts)
 	adm.GET("/remediation/failures", a.GetRemediationFailures)
 	adm.GET("/remediation/impact", a.GetRemediationImpact)
+	adm.GET("/remediation/posture", a.GetRemediationPosture)
 
 	return e
 }

@@ -56,6 +56,9 @@
   --color-cat-dev: #a78bfa;
   --color-cat-media: #f472b6;
   --color-cat-comms: #fbbf24;
+  --color-cat-remote: #fb923c;
+  --color-cat-security: #2dd4bf;
+  --color-cat-utility: #a8a29e;
   --color-cat-system: #64748b;
   --color-cat-other: #9fb0c6;
 
@@ -163,6 +166,9 @@
   --color-cat-dev: #7c3aed;
   --color-cat-media: #db2777;
   --color-cat-comms: #d97706;
+  --color-cat-remote: #ea580c;
+  --color-cat-security: #0d9488;
+  --color-cat-utility: #78716c;
   --color-cat-system: #64748b;
   --color-cat-other: #94a3b8;
 

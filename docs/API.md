@@ -57,6 +57,7 @@ itself from `code` (+ `params`). For an unknown `code`, `message` may be shown. 
 | `unsupported_media_type` | 415 | — |
 | `category_rule_conflict` | 409 | classification rule could not be added (same `match_type`+`match_value` exists) |
 | `too_many_items` | 400 | limit exceeded in a bulk request (`params.max`) |
+| `machine_not_archived` | 409 | purge: only archived machines can be deleted permanently (`params.machine_ids`, `params.count`); nothing was deleted |
 | `dry_run_required` | 409 | hygiene: a dry-run result must be observed first (§10) |
 | `unknown_catalog_item` | 400 | hygiene: item not in the catalog (`params.kind`, `params.item_id`) |
 | `setup_already_done` | 409 | first-run setup: an admin account already exists (§11) |
@@ -249,13 +250,32 @@ other sessions are unaffected.
 | Endpoint | Authorization | Body / response |
 |----|-------|---------------|
 | `GET /api/settings/public` | **none** (for the login page) | `{org_name, default_lang, version, require_2fa, needs_admin, setup_complete}` (`require_2fa` §2.4; the last two §11) |
-| `GET /api/admin/settings/general` | admin | `{org_name, default_lang, require_2fa}` |
+| `GET /api/admin/settings/general` | admin | `{org_name, default_lang, require_2fa, work_hours}` |
 | `PUT /api/admin/settings/general` | admin | same body → `204` (a field that is not sent is unchanged; at least one must be sent) |
 
 `org_name` ≤120 characters (default `""`), `default_lang ∈ {tr,en}` (default `tr`),
 `require_2fa` boolean (default `false`). `default_lang` is also the language of alert e-mails and of
 the stored fallback alert text. `version` is the server build version (`"dev"` if
 `-ldflags -X …/buildinfo.Version=` is not given).
+
+**`work_hours`** (app_setting `work_hours`; the schedule for work-hours-only devices, §6.1):
+
+```jsonc
+{ "days": [1,2,3,4,5],          // ISO weekdays, 1 = Monday … 7 = Sunday
+  "start": "09:00", "end": "17:30", // HH:MM wall clock, start inclusive, end exclusive, end > start
+  "tags": [],                    // machine tags (machine.tags), matched case-insensitively, e.g. ["Office"]
+  "grace_minutes": 60,           // 0–240: no NEW offline alert in the first/last N minutes of the day
+  "offline_after_minutes": 60,   // 5–480: minimum offline time before a work-hours device alerts
+  "stale_after_days": 1,         // 1–30: whole work days missed before a device counts as stale (§6.1)
+  "timezone": "Europe/Istanbul" } // read-only; ignored on PUT
+```
+
+Shown values are the defaults used until an admin saves a schedule. With the default empty `tags`
+no machine is a work-hours device: every machine is monitored 24/7 until tags are chosen. On `PUT`, `work_hours`
+replaces the whole schedule: every field except `timezone` and `stale_after_days` is required
+(an omitted `stale_after_days` keeps its current value; `400 invalid_request`,
+`params.field = "work_hours.<field>"` on a missing or invalid one). Days/tags are de-duplicated
+(tags case-insensitively, first spelling kept). No overnight schedules and no public holidays yet.
 
 ### 2.4 The "Require 2FA" policy (`require_2fa`)
 
@@ -395,7 +415,7 @@ otherwise → `1h`.
 
 | Endpoint | Description |
 |----|----------|
-| `GET  /api/alerts` | `status,severity,machine,from,to` → `AlertDTO[]` |
+| `GET  /api/alerts` | `status,severity,machine,rule,tag,from,to` → `AlertDTO[]` (`tag` = machine tag, case-insensitive; newest 1000) |
 | `POST /api/alerts/{id}/ack` | acknowledge the alert (`ack`) → `204`; `404 not_found` if there is no open alert |
 
 ### `AlertDTO` and multilingual text
@@ -405,7 +425,9 @@ otherwise → `1h`.
   "rule": "disk_low", "severity": "critical", "status": "open", "value": 4.2,
   "params": { "hostname": "ACCOUNTING-01", "mount": "C:", "free_pct": 4.2, "threshold": 5, "unit": "%" },
   "message": "ACCOUNTING-01 is low on free space on C:: 4.2%",   // FALLBACK text
-  "opened_at": "…", "last_seen_at": "…", "resolved_at": null,
+  "opened_at": "…", "last_seen_at": "…", "resolved_at": null, "acked_at": null,
+  "machine_tags": ["Office"],    // the machine's tags at read time (always an array)
+  "work_hours": true,            // GET /api/alerts only: machine is a work-hours-only device (§6.1)
   "detail": { /* same object as params — for old clients */ } }
 ```
 
@@ -417,12 +439,16 @@ top-level fields.
 
 | `rule` | `params` | TR template | EN template |
 |--------|----------|-----------|-----------|
-| `offline` | `hostname`, `age_seconds` (int), `minutes` (int = age/60), `threshold` (s), `unit:"s"` | `{hostname} çevrimdışı ({minutes} dk görülmedi)` | `{hostname} is offline (not seen for {minutes} min)` |
+| `offline` | `hostname`, `age_seconds` (int, since last seen), `minutes` (int = age/60), `threshold` (s; absent for `kind:"stale"`), `unit:"s"`, `work_hours` (true for work-hours devices), `kind` (work-hours devices only: `not_started` \| `went_offline` \| `stale`, §6.1); for `stale` also `days` (int = age/86400), `stale_after_days`, `last_seen` (RFC 3339) | no kind: `{hostname} çevrimdışı ({minutes} dk görülmedi)`; `not_started`: `{hostname} bugün hiç açılmadı`; `went_offline`: `{hostname} gün içinde çevrimdışı oldu ({minutes} dk görülmedi)`; `stale`: `{hostname} uzun süredir sessiz ({days} gündür görülmedi) — kullanılmıyorsa arşivleyin` | `{hostname} is offline (not seen for {minutes} min)`; `{hostname} has not been switched on today`; `{hostname} went offline during the day (not seen for {minutes} min)`; `{hostname} has been silent for a long time (not seen for {days} days) — archive it if it is no longer in use` |
 | `cpu_high` | `hostname`, `value` (percent 0-100), `threshold`, `unit:"%"`, `window_seconds` | `{hostname} CPU yüksek: %{value}` | `{hostname} CPU usage is high: {value}%` |
 | `mem_high` | `hostname`, `value` (percent 0-100), `threshold`, `unit:"%"`, `window_seconds` | `{hostname} bellek yüksek: %{value}` | `{hostname} memory usage is high: {value}%` |
 | `disk_low` | `hostname`, `mount`, `free_pct` (percent), `threshold`, `unit:"%"` | `{hostname} {mount} diskinde boş alan az: %{free_pct}` | `{hostname} is low on free space on {mount}: {free_pct}%` |
 | `smart_fail` | `hostname`, `disk`, `smart_ok` (bool\|null), `predict_fail` (bool\|null) | `{hostname} {disk} diski SMART arızası bildiriyor` | `{hostname} disk {disk} reports a SMART failure` |
-| `crash_storm` | `hostname`, `count` (int), `window_seconds`, `window_minutes` (int), `threshold` | `{hostname} son {window_minutes} dk'da {count} çökme` | `{hostname} had {count} crashes in the last {window_minutes} min` |
+| `crash_storm` | `hostname`, `count` (int), `window_seconds`, `window_minutes` (int), `threshold`, `app` (most frequent faulting process base name), `apps` (distinct process count) | `{hostname} son {window_minutes} dk'da {count} çökme (en sık: {app})` | `{hostname} had {count} crashes in the last {window_minutes} min (mostly {app})` |
+
+When the engine closes an alert itself for a reason other than "condition cleared", it adds
+`params.resolved_reason`: `work_hours_end` (the work day ended) or `not_stale` (a stale alert
+whose device reported again outside work hours), §6.1.
 
 `threshold` is the threshold that fired (the warning or critical threshold, depending on
 `severity`). **Rows written before this version have no `threshold` (and, for cpu/mem, no
@@ -430,8 +456,56 @@ top-level fields.
 are filled in at read time — the client must tolerate a missing `threshold`. An open alert's `params`
 is updated on every evaluation (30 s).
 
+**Severity** is `info`, `warning` or `critical`. Only a newly opened **critical** alert sends an
+e-mail; `info` and `warning` never do.
+
 **E-mail:** critical alert e-mails are generated in the `default_lang` language (tr/en) from the
 small message table on the server (`server/internal/alerts/i18n.go`); both languages are complete.
+
+### 6.1 Rule evaluation (every 30 s)
+
+| Rule | Condition | Opens | Clears |
+|------|-----------|-------|--------|
+| `offline` | seconds since `machine_live.ts` ≥ warn/crit | immediately | condition clear for 10 min |
+| `cpu_high`, `mem_high` | `metric_5m` average over `for_seconds` ≥ warn/crit | immediately | value < threshold − 5 points (hysteresis), then 10 min |
+| `disk_low` | latest free % per mount ≤ warn/crit | immediately | free > threshold + 2 points, then 10 min; **held** (neither refreshed nor resolved) while the machine sends no disk samples (off/asleep) |
+| `smart_fail` | `disk_health` reports `predict_fail` or `smart_ok=false` | immediately (critical) | 10 min after the disk reports healthy |
+| `crash_storm` | `app_crash`+`app_hang` events in `params.window_seconds` (default 600) ≥ warn/crit; processes in `params.ignore_apps` (base names, case-insensitive, `.exe` optional) never count | immediately | condition clear for **60 min** (a crash-looping service stays one alert) |
+
+Archived machines are never evaluated. Default thresholds (`alert_rule`, tunable under
+Settings → Alert Thresholds): offline 300/1800 s, cpu 85/95 % over 600 s, mem 95/98 % over 600 s
+(0019; was 90/97), disk 15/5 % free, crash storm 3/6 per 10 min.
+
+**Work-hours devices.** A machine carrying one of `work_hours.tags` (§2.3) is a work-hours-only
+device (staff PC); every other machine keeps the 24/7 behaviour above. For a work-hours device the
+`offline` rule is evaluated against the schedule, in Europe/Istanbul wall-clock time:
+
+- Outside the schedule (non-working day, before `start`, from `end` on) no offline alert exists:
+  an open one is resolved at once with `params.resolved_reason = "work_hours_end"` — a PC shut
+  down at 17:35 never alerts, one left open at 17:30 does not nag overnight.
+- Inside the schedule, offline time counts from `max(last_seen, today's start)`; a PC switched off
+  yesterday evening is "offline for 0 min" at 09:00.
+- The threshold is `max(rule warn, offline_after_minutes)` (a PC napping over lunch is not an
+  incident). Severity is never critical (no e-mail for an absent user) and depends on the kind:
+  a device **not seen at all since today's `start`** opens with severity **info** and
+  `params.kind = "not_started"` ("not switched on today"); one seen today that then went offline
+  is **warning** with `params.kind = "went_offline"`. An open `not_started` alert whose device
+  briefly reports and goes offline again is updated in place to `went_offline`/warning.
+- A **new** alert opens only after `start + grace_minutes` and before `end − grace_minutes`
+  (morning boot-up, early leavers); an alert already open is kept until the day ends. With the
+  defaults (09:00–17:30, grace 60, offline_after 60) new alerts open between 10:00 and 16:30; a
+  PC still off at 10:00 on a workday alerts at 10:00.
+- **Stale devices.** A device that has missed `stale_after_days` (default 1) **whole work days** —
+  work windows that started after its `last_seen` and have ended — is *stale*. Instead of a new
+  offline alert every workday it keeps (or, if none is open, opens once) a single `offline` alert
+  with severity **info** and `params.kind = "stale"`, under the same dedup key `offline:<machine>`
+  (an open `not_started` alert turns into it in place when the missed day ends). The stale alert is
+  evaluated around the clock — it is **not** resolved at the end of work hours, at night or at the
+  weekend — and resolves only when the device reports again (outside work hours at once with
+  `resolved_reason = "not_stale"`, inside them through the usual 10-minute grace) or when the
+  machine is archived. Non-working days do not count as missed days, so a PC switched off for the
+  weekend is not stale on Monday morning. The wording suggests archiving the device if it is no
+  longer in use.
 
 ---
 
@@ -439,34 +513,55 @@ small message table on the server (`server/internal/alerts/i18n.go`); both langu
 
 | Endpoint | Description |
 |----|----------|
-| `GET/POST /api/admin/categories`, `PUT/DELETE /api/admin/categories/{id}` | program-type classification rules (CRUD) |
-| `GET  /api/admin/unclassified` | `from,to` → frequently seen unclassified process names |
-| `POST /api/admin/reclassify` | `{window?}` — reclassify the raw window + refresh rollups |
-| `GET/PUT /api/admin/alert-rules` | read/update alert thresholds |
+| `GET/POST /api/admin/categories`, `PUT/DELETE /api/admin/categories/{id}` | program-type classification rules (CRUD); GET takes `window?` (default `7d`) for the match stats |
+| `GET  /api/admin/categories/test` | `name` → `{name, category?, matches:[{id, category, match_type, match_value, priority}]}` — which rule wins now (first) and which it shadows |
+| `GET  /api/admin/unclassified` | `from,to,sort?` (`machines`\|`count`\|`cpu`, default `machines`) → `[{name, count, machines, cpu_avg, cpu_share, last_seen}]`, at most 200; window clamped to the last 30 days, machine counts taken over the top 1000 names by count (by CPU for `sort=cpu`) |
+| `POST /api/admin/reclassify` | `{window?, names?}` — reclassify the raw window (or only `names`) + refresh rollups |
+| `GET/PUT /api/admin/alert-rules` | read/update alert thresholds (and the `crash_storm` ignore list) |
+| `GET  /api/admin/crash-apps` | `window?` (default `7d`, at most `30d`), `limit?` (default 20, 1–50) → `{window_seconds, apps:[{app, crashes, machines, ignored}]}`: faulting process base names of `app_crash`/`app_hang` events of non-archived machines in the window, most crashes first; `ignored` = already in `crash_storm` `ignore_apps`. Suggestions for the ignore-list editor |
 
 - **Category rule** body (POST, and PUT with the id in the **path** — the full rule as GET returns
   it): `{category, match_type, match_value, priority, enabled}` (`id` may be repeated in the PUT
   body but must equal the path). `category` 1-64 characters, `match_value` 1-128 (lower-cased),
   `match_type ∈ {exact, prefix, glob}` (empty → `exact`); otherwise `invalid_request` +
   `params.field`. A duplicate `match_type`+`match_value` → `409 category_rule_conflict` (create and
-  update). Unknown id → `404`. DELETE → `204`.
+  update). Unknown id → `404`. DELETE → `204`. GET also returns read-only `builtin` (seed rule
+  never edited; any PUT clears it), `samples`, `machines`, `last_seen` (how often the rule was the
+  winning match over the window, from `proc_cat_1h`; `0` = never matched); create/update accept and
+  ignore them.
+- **unclassified** reads `proc_name_1h` and resolves each name against the **current** rules, so a
+  name drops off the list as soon as a rule covers it (before any reclassify). `cpu_share` is the
+  name's share (0..1) of all process CPU in the window; `machines` is a distinct count from the raw
+  rows. Unknown `sort` → `invalid_request` (`params.field="sort"`).
+- **categories/test** `name` 1-128 characters, else `invalid_request` (`params.field="name"`).
+  `name` in the answer is the normalised form the rules see.
 - **reclassify** `window`: `6h`, `24h`, `7d` … (default `24h`, at most `30d`); anything else →
-  `invalid_request` (`params.field="window"`). Response `{updated_rows, from, to}`.
+  `invalid_request` (`params.field="window"`). `names` (optional, 1-200 names, each ≤128,
+  normalised server-side) limits the pass to those process names, else `invalid_request`
+  (`params.field="names"`). Response `{updated_rows, names, from, to}`.
 - **alert-rules** PUT body is a bare array `[{rule, enabled, warn_threshold|null,
   crit_threshold|null, for_seconds}]`; the response is the full list as GET returns it. An unknown
   `rule` rejects the whole save (`invalid_request`, `params.rule`) and nothing is written.
+  `crash_storm` also carries `ignore_apps: [string]` (GET always returns it for that rule, possibly
+  `[]`; omitted on PUT = keep the stored list, `[]` = clear it). Entries are process **base names**:
+  trimmed, lower-cased, a trailing `.exe` dropped (the form the engine matches), empties and
+  duplicates removed; an entry with `/` or `\`, a control character or more than 128 bytes →
+  `invalid_request` (`params.field="ignore_apps"`), more than 100 entries → `too_many_items`
+  (`params.max`); `ignore_apps` on any other rule → `invalid_request`.
 | `GET/POST /api/admin/panel-users` … | panel user management (§7.1) |
 | `GET/POST /api/admin/users` | **legacy alias** for `panel-users` list/create (same handler). `PUT /api/admin/users/{user}`, however, is something else: the profile of a monitored **domain** user |
 | `GET/PUT /api/admin/settings/general` | general settings (§2.3) |
 | `GET  /api/admin/ingest-token` | `{masked, server_host, hint_code:"ingest_token_config", hint}` — `hint` is English fallback text, the UI translates `hint_code` |
 | `POST /api/admin/machines/archive` | `{machine_ids:[…]}` (≤500) → decommission (archive) machines; resolve open alerts, close open sessions, audit record → `{changed}` |
 | `POST /api/admin/machines/restore` | `{machine_ids:[…]}` → restore from archive → `{changed}` |
+| `POST /api/admin/machines/purge` | `{machine_ids:[…]}` (≤50; more → 400 `too_many_items`, `params.max`) → **permanently delete** archived machines and their data (hygiene attempts are kept as audit trail, §10); any non-archived id → 409 `machine_not_archived`, nothing deleted; unknown ids ignored → `{purged}` |
 | `GET  /api/admin/machines/archived` | archived machines (`archived_at`, `archived_by`, last seen) |
 | `GET  /api/admin/remediation` | endpoint hygiene settings payload (§10) |
 | `PUT  /api/admin/remediation/policy` | write policy + selection, bump revision, audit record (§10) |
 | `GET  /api/admin/remediation/attempts` | `limit,outcome,item_id` → audit feed (§10) |
 | `GET  /api/admin/remediation/failures` | open failures: last attempt failed + item still present, grouped by (item, outcome, error code); count of pairs that later recovered (§10) |
 | `GET  /api/admin/remediation/impact` | `days` (1–14, default 7) → active-hour CPU/RAM averages before/after successful app removal, control group, per-app process footprint (§10) |
+| `GET  /api/admin/remediation/posture` | Optimization page roll-up: per-platform switch counts, per-item progress, per-machine hygiene posture, Linux advisory recommendations (§10, read-only) |
 
 ### 7.1 Panel users (`/api/admin/panel-users`, admin only)
 
@@ -555,6 +650,39 @@ never a title/path/URL.
 ```jsonc
 { "apps": [ { "name": "chrome", "category": "browser", "cpu_avg": 12.3, "cpu_max": 96.0,
               "mem_avg": 850000000, "machines": 27, "focus_seconds": 44100, "active_hours": 21.0 } ] }
+```
+
+### `GET /api/stats/fleet-trend?range=24h`  (alias: `GET /api/v1/stats/fleet-trend`)
+
+`range ∈ {24h, 7d}` (default `24h`; any other value → `400 invalid_request`, `params.field =
+"range"`). Fleet health trend for the overview page — read from the `metric_5m` cagg (real-time
+aggregation, so the live edge is included), re-bucketed with `time_bucket(…, 'Europe/Istanbul')`:
+15-minute buckets for `24h`, 1-hour buckets for `7d` (`bucket_seconds`). The window starts at the
+local bucket containing `now() − range`. Archived machines are excluded.
+
+| Field | Meaning |
+|---|---|
+| `online` | distinct machines with at least one vitals sample in the bucket |
+| `active` | distinct **non-Linux** machines whose last session state in at least one 5-minute sub-bucket was `active` (a Linux host's logind/SSH session is not a person at a desk — same rule as `/api/fleet/overview`) |
+| `cpu_avg` | mean of the per-machine 5-minute CPU averages, percent 0-100 |
+| `mem_ratio_avg` | mean of the per-machine 5-minute RAM ratios, 0-1 |
+
+Buckets with no reporting machine are absent (not zero-filled). `summary.*.current` is the latest
+bucket (may be partial), `avg` / `peak` are the mean / maximum over the returned buckets — for
+`cpu_avg` / `mem_ratio_avg` that is the peak of the fleet average, not a single machine's maximum.
+
+```jsonc
+{
+  "range": "24h", "bucket_seconds": 900, "generated_at": "2026-10-20T09:00:00Z",
+  "points": [ { "ts": "2026-10-19T09:00:00Z", "online": 42, "active": 31,
+                "cpu_avg": 18.4, "mem_ratio_avg": 0.62 } ],
+  "summary": {
+    "online":        { "current": 44,   "avg": 38.2, "peak": 47 },
+    "active":        { "current": 33,   "avg": 21.5, "peak": 39 },
+    "cpu_avg":       { "current": 21.0, "avg": 15.7, "peak": 34.9 },
+    "mem_ratio_avg": { "current": 0.64, "avg": 0.58, "peak": 0.71 }
+  }
+}
 ```
 
 ### `GET /api/stats/slow-machines?days=7&limit=20&min_score=0`  (alias: `GET /api/v1/stats/slow-machines`)
@@ -670,6 +798,13 @@ only what is present, so every reporting machine is the denominator for every it
 whose local GPO switch forbids the action. `policy.revision` is a **number** (whereas
 `policy.revision` in the ingest response is a string).
 
+Since migration `0020` the fleet block also carries the three switches separately:
+`apps_not_allowed`, `startup_not_allowed`, `enforce_off` (reporting machines whose switch is known
+to be off) and `switches_unknown` (reporting machines that have not reported since the server began
+storing them). Startup items carry `enabled_count`: machines where the entry is present **and**
+still runs at sign-in — a disabled entry stays present (its Run value is never deleted), so
+`present_count` alone over-counts what is left to do.
+
 ### `PUT /api/admin/remediation/policy`
 
 The body is the full desired state (the selection is replaced wholesale), so all five keys are
@@ -699,6 +834,10 @@ left empty, no filter is applied.
                   "action": "remove", "outcome": "ok", "duration_ms": 120 } ] }
 ```
 
+Attempts outlive a permanent machine deletion (purge, §7). For a machine that no longer exists the
+row carries `"machine_deleted": true` and `hostname` comes from its `purge` audit row (absent if
+there is none); the panel shows it as plain text instead of a link to the machine page.
+
 `action ∈ {remove, deprovision, disable, enable}`,
 `outcome ∈ {ok, failed, dry_run, not_present, not_allowed, blocked, timeout, unknown_item}`.
 `error_code` is only a **code** (`0x80073cfa`) — never a message or a path.
@@ -714,6 +853,22 @@ Historical data ages out with the normal retention period; per-user totals keep 
 arrives from an archived machine, the server **restores the machine automatically** and writes
 `auto_restore` to `machine_archive_audit`. A repeated request for a machine already in that state is a
 no-op and is not written to the audit.
+
+**Permanent deletion (purge)** is the irreversible step after archiving and is only accepted for
+machines that are archived at the time of the request (rows are locked `FOR UPDATE`, so a concurrent
+restore or auto-restore cannot race it). One transaction writes a `purge` row to
+`machine_archive_audit` (who: panel username, when, client IP, hostname, and how many hygiene
+attempts were kept) and deletes the machine's rows from `metric_sample`, `disk_usage_sample`,
+`process_sample`, `app_focus_sample`, `event`, `usage_session`, `alert`, `machine_live`,
+`disk_health`, `machine_remediation_state` and finally `machine`. **`remediation_attempt` is kept**:
+it is the actuation audit trail and ages out with its 365-day retention. In
+`GET /api/admin/remediation/attempts` such rows carry `machine_deleted: true` and the hostname from
+the purge audit row; the posture, open-failure and impact views leave them out. After commit the server refreshes the continuous
+aggregates built on those hypertables from the machine's oldest raw row onwards (in the background,
+best-effort; one refresh runs at a time and purges that commit meanwhile are merged into the next
+pass), so per-machine and per-user rollups drop its rows too. If the agent on that PC is still
+installed, its next report registers the machine again under the same `machine_id`, as a new active
+machine with no history.
 
 ### `GET /api/admin/remediation/failures`
 
@@ -735,6 +890,46 @@ which nothing was removed, over the same calendar windows (relative to the media
 effect = diff(fleet) − diff(control). `items[]` is the prior CPU/memory average of the processes in
 the removed app's catalog `process_names`; since process sampling is top-N, it is a **lower bound**.
 Only permitted aggregate metrics are read.
+
+### `GET /api/admin/remediation/posture`
+
+Read-only roll-up for the panel's Optimization page; nothing here selects or triggers an action.
+
+```jsonc
+{
+  "generated_at": "…", "catalog_version": "v1-14da70d24ee0", "policy_revision": 7,
+  "platforms": [ { "kind": "windows", "machines": 40, "reporting": 33, "allow_apps": 20,
+                   "allow_startup": 18, "enforce": 15, "actuating": 15 },
+                 { "kind": "linux", "machines": 1, "reporting": 0, "allow_apps": 0,
+                   "allow_startup": 0, "enforce": 0, "actuating": 0 } ],
+  "items": [ { "kind": "startup", "item_id": "startup.spotify", "display_name": "…",
+               "selected": true, "pending": 4, "converged": 9, "dry_run": 0, "open_failures": 1 } ],
+  "machines": [ { "machine_id": "…", "hostname": "PC-01", "tags": [], "excluded": false,
+                  "reported_at": "…", "allow_apps": true, "allow_startup": false, "enforce": true,
+                  "allowed": true, "catalog_stale": false, "policy_current": true,
+                  "pending_apps": 2, "pending_startup": 0, "open_failures": 0,
+                  "last_attempt_at": "…" } ],
+  "linux": [ { "machine_id": "…", "hostname": "srv-01", "online": true, "last_seen": "…",
+               "cpu_avg": 12.5, "mem_ratio_avg": 0.91, "mem_total": 8589934592,
+               "disk_mount": "/", "disk_used_pct": 88.2, "disk_free_bytes": 5000000000,
+               "uptime_days": 120.4, "smart_bad": false, "sample_hours": 168,
+               "advice": [ { "key": "mem_pressure", "severity": "warn", "value": 0.91 } ] } ]
+}
+```
+
+`items` lists selected items plus any item with an attempt in the 90-day window. `pending` =
+targeted (not tag-excluded) Windows machines where the item is still present (apps) or still
+enabled at sign-in (startup); `converged` = machines with an `ok`/`not_present` attempt that no
+longer have it; `open_failures` uses the `/failures` classification. `machines` lists non-archived
+Windows machines; the switch fields are `null` until the machine reports after migration `0020`
+(`allowed` is the collapsed flag and is also set by older reports). Excluded machines have nothing
+pending.
+
+`linux` is **advisory only**: the Linux agent has no hygiene backend and the server never pushes
+anything to a host. Advice is derived from metrics already collected — `advice[].key ∈ {smart,
+disk_critical (fullest mount ≥95 % used), disk_low (≥85 %), mem_pressure (7-day mean ≥0.85),
+cpu_sustained (7-day mean ≥75 %), long_uptime (≥90 days — installed kernel/library updates need a
+restart)}`. CPU/RAM advice is withheld below 12 hourly samples.
 
 ### `GET /api/machines/{id}/remediation`  (viewer authorization)
 

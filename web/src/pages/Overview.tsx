@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { motion, useReducedMotion } from 'motion/react'
 import {
   Activity, AppWindow, BellRing, CheckCircle2, Clock3, Cpu, Flame, HardDrive, HeartPulse, Info,
-  MemoryStick, ShieldAlert, TriangleAlert, Wifi,
+  MemoryStick, ShieldAlert, TrendingUp, TriangleAlert, Wifi,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { PageHeader } from '@/components/AppShell'
@@ -17,7 +17,8 @@ import { TimeSeriesChart } from '@/components/TimeSeriesChart'
 import { ActivityHeatmap } from '@/components/ActivityHeatmap'
 import { Skeleton, SkeletonCard } from '@/components/Skeleton'
 import { EmptyState } from '@/components/EmptyState'
-import { useFleetOverview, useFleetSummary, useHourlyActivity, useTopApps } from '@/hooks/queries'
+import { useFleetOverview, useFleetSummary, useFleetTrend, useHourlyActivity, useTopApps } from '@/hooks/queries'
+import { getRange } from '@/lib/ranges'
 import { fadeUp, staggerContainer } from '@/lib/motion'
 import { catMeta, eventKindLabel, ruleLabel, severityLabel, severityToken } from '@/lib/labels'
 import type { StatusToken } from '@/lib/labels'
@@ -32,7 +33,7 @@ import {
 import type { TKey } from '@/i18n'
 import { cn } from '@/lib/cn'
 import type {
-  AlertDTO, FleetOverview, HeatmapCell, OverviewEvent, TopAppEntry, TopAppsBy,
+  AlertDTO, FleetOverview, FleetTrendRange, FleetTrendStat, HeatmapCell, OverviewEvent, TopAppEntry, TopAppsBy,
 } from '@/lib/types'
 import { useT } from '@/i18n'
 import { translateDynamic } from '@/i18n'
@@ -216,23 +217,33 @@ export function Overview() {
             </AttentionCard>
           </div>
 
-          {/* 4 · Recent alerts + events feed */}
-          <motion.div variants={fadeUp} initial="hidden" animate="show" className="mt-4">
-            <Card>
-              <CardHeader
-                title={t('overview.eventsTitle')}
-                description={t('overview.eventsBody')}
-                action={
-                  <Link to="/alerts" className="text-[13px] font-medium text-accent hover:underline ring-focus">
-                    {t('overview.allAlerts')}
-                  </Link>
-                }
-              />
-              <div className="mt-4">
-                <EventFeed alerts={ov.recent_alerts ?? []} events={ov.recent_events ?? []} />
-              </div>
-            </Card>
-          </motion.div>
+          {/* 4 · Recent alerts + events feed | fleet health trend. On desktop the
+                trend card sets the row height; the feed fills it and scrolls (its
+                list has a zero flex basis, so it never stretches the row). */}
+          <div className="mt-4 grid gap-4 lg:grid-cols-2 [&>*]:min-w-0">
+            <motion.div variants={fadeUp} initial="hidden" animate="show" className="h-full">
+              <Card className="flex h-full flex-col">
+                <CardHeader
+                  title={t('overview.eventsTitle')}
+                  description={t('overview.eventsBody')}
+                  action={
+                    <Link to="/alerts" className="shrink-0 text-[13px] font-medium text-accent hover:underline ring-focus">
+                      {t('overview.allAlerts')}
+                    </Link>
+                  }
+                />
+                <div
+                  className="mt-4 rounded-[var(--radius-md)] ring-focus lg:min-h-0 lg:flex-1 lg:basis-0 lg:overflow-y-auto lg:pr-1"
+                  tabIndex={0}
+                  role="region"
+                  aria-label={t('overview.eventsScroll')}
+                >
+                  <EventFeed alerts={ov.recent_alerts ?? []} events={ov.recent_events ?? []} />
+                </div>
+              </Card>
+            </motion.div>
+            <FleetTrendCard />
+          </div>
         </>
       )}
 
@@ -442,6 +453,185 @@ function EventFeed({ alerts, events }: { alerts: AlertDTO[]; events: OverviewEve
         )
       })}
     </motion.ul>
+  )
+}
+
+/* ── Fleet health trend ───────────────────────────────────────────────────── */
+
+const TREND_RANGES: FleetTrendRange[] = ['24h', '7d']
+type TrendView = 'devices' | 'load'
+const TREND_VIEWS: { key: TrendView; labelKey: TKey }[] = [
+  { key: 'devices', labelKey: 'overview.trendViewDevices' },
+  { key: 'load', labelKey: 'overview.trendViewLoad' },
+]
+
+/** Compact segmented control (same look as the top-apps metric switch). */
+function Segmented<K extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string
+  options: { key: K; text: string; title?: string }[]
+  value: K
+  onChange: (key: K) => void
+}) {
+  return (
+    <div className="inline-flex rounded-[var(--radius-md)] bg-bg-elev/70 p-1" role="group" aria-label={label}>
+      {options.map((o) => (
+        <button
+          key={o.key}
+          type="button"
+          onClick={() => onChange(o.key)}
+          aria-pressed={value === o.key}
+          title={o.title}
+          className={cn(
+            'tabular rounded-[9px] px-2.5 py-1 text-[12px] font-medium transition-colors ring-focus',
+            value === o.key ? 'bg-surface-2 text-text' : 'text-text-muted hover:text-text',
+          )}
+        >
+          {o.text}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** Mean device count — one decimal so a small fleet's average is not rounded away. */
+function avgCount(n: number): string {
+  return formatNumber(Math.round(n * 10) / 10)
+}
+
+/** One summary tile; its colour dot doubles as the chart legend. */
+function TrendStat({
+  label,
+  color,
+  stat,
+  format,
+  avgFormat = format,
+}: {
+  label: string
+  color: string
+  stat: FleetTrendStat
+  format: (n: number) => string
+  avgFormat?: (n: number) => string
+}) {
+  const t = useT()
+  return (
+    <div className="min-w-0 rounded-[var(--radius-md)] bg-wash px-3 py-2.5">
+      <div className="flex items-center gap-1.5 text-[12px] text-text-muted">
+        <span className="h-2 w-3.5 shrink-0 rounded-full" style={{ backgroundColor: color }} aria-hidden />
+        <span className="truncate">{label}</span>
+      </div>
+      <div className="mt-1 flex items-baseline gap-1.5">
+        <span className="tabular text-[20px] font-semibold leading-tight text-text">{format(stat.current)}</span>
+        <span className="text-[11px] text-text-dim">{t('overview.trendNow')}</span>
+      </div>
+      <div className="tabular mt-0.5 truncate text-[12px] text-text-dim">
+        {t('overview.trendStats', { avg: avgFormat(stat.avg), peak: format(stat.peak) })}
+      </div>
+    </div>
+  )
+}
+
+function FleetTrendCard() {
+  const t = useT()
+  const [range, setRange] = useState<FleetTrendRange>('24h')
+  const [view, setView] = useState<TrendView>('devices')
+  const { data, isLoading } = useFleetTrend(range)
+
+  const rows = useMemo(
+    () =>
+      (data?.points ?? []).map((p) => ({
+        t: p.ts,
+        online: p.online,
+        active: p.active,
+        cpu: p.cpu_avg,
+        mem: p.mem_ratio_avg * 100,
+      })),
+    [data],
+  )
+  const sum = data?.summary
+
+  const series =
+    view === 'devices'
+      ? [
+          { key: 'online', name: t('overview.trendOnline'), color: chart.ok },
+          { key: 'active', name: t('overview.trendActive'), color: chart.accent2 },
+        ]
+      : [
+          { key: 'cpu', name: t('common.cpu'), color: chart.cpu },
+          { key: 'mem', name: t('common.ram'), color: chart.mem },
+        ]
+
+  return (
+    <motion.div variants={fadeUp} initial="hidden" animate="show" className="h-full">
+      <Card className="flex h-full flex-col">
+        <CardHeader
+          title={t('overview.trendTitle')}
+          description={range === '24h' ? t('overview.trendBody24h') : t('overview.trendBody7d')}
+          action={
+            <Segmented
+              label={t('overview.trendRange')}
+              value={range}
+              onChange={setRange}
+              options={TREND_RANGES.map((k) => ({ key: k, text: getRange(k).short, title: getRange(k).label }))}
+            />
+          }
+        />
+        <div className="mt-3">
+          <Segmented
+            label={t('overview.trendView')}
+            value={view}
+            onChange={setView}
+            options={TREND_VIEWS.map((v) => ({ key: v.key, text: t(v.labelKey) }))}
+          />
+        </div>
+        <div className="mt-3 flex flex-1 flex-col">
+          {isLoading ? (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <Skeleton className="h-[78px] w-full" />
+                <Skeleton className="h-[78px] w-full" />
+              </div>
+              <Skeleton className="mt-4 h-[220px] w-full" />
+            </>
+          ) : rows.length === 0 || !sum ? (
+            <div className="grid flex-1 place-items-center py-6">
+              <EmptyState icon={TrendingUp} title={t('overview.trendEmptyTitle')} description={t('overview.trendEmptyBody')} />
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                {view === 'devices' ? (
+                  <>
+                    <TrendStat label={series[0].name} color={series[0].color} stat={sum.online} format={formatNumber} avgFormat={avgCount} />
+                    <TrendStat label={series[1].name} color={series[1].color} stat={sum.active} format={formatNumber} avgFormat={avgCount} />
+                  </>
+                ) : (
+                  <>
+                    <TrendStat label={series[0].name} color={series[0].color} stat={sum.cpu_avg} format={(n) => formatPercent(n)} />
+                    <TrendStat label={series[1].name} color={series[1].color} stat={sum.mem_ratio_avg} format={(n) => formatRatioPercent(n)} />
+                  </>
+                )}
+              </div>
+              <div className="mt-4">
+                <TimeSeriesChart
+                  data={rows}
+                  series={series}
+                  spanMs={getRange(range).ms}
+                  height={220}
+                  unit={view === 'devices' ? 'number' : 'percent'}
+                  hideLegend
+                  emptyLabel={t('overview.trendEmptyTitle')}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      </Card>
+    </motion.div>
   )
 }
 

@@ -196,10 +196,12 @@ func persistRemediation(ctx context.Context, tx pgx.Tx, machineID string, r *mod
 	if _, err := tx.Exec(ctx, `
 		UPDATE machine SET
 			remediation_allowed=$2, remediation_catalog_version=$3,
-			remediation_policy_revision=$4, remediation_reported_at=$5
+			remediation_policy_revision=$4, remediation_reported_at=$5,
+			remediation_allow_apps=$6, remediation_allow_startup=$7, remediation_enforce=$8
 		WHERE machine_id=$1`,
 		machineID, allowed, nullStr(trimTo(r.CatalogVersion, maxVersionLen)),
-		nullStr(trimTo(r.PolicyRevision, maxVersionLen)), checkedAt); err != nil {
+		nullStr(trimTo(r.PolicyRevision, maxVersionLen)), checkedAt,
+		r.Allowed.Apps, r.Allowed.Startup, r.Allowed.Enforce); err != nil {
 		return err
 	}
 	return nil

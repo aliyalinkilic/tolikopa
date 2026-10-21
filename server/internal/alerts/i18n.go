@@ -57,11 +57,28 @@ func str(p Params, key string) string {
 type renderer func(p Params) string
 
 var messages = map[string]map[string]renderer{
+	// offline: params.kind distinguishes work-hours devices (docs/API.md §6.1).
 	"offline": {
 		LangTR: func(p Params) string {
+			switch str(p, "kind") {
+			case "not_started":
+				return fmt.Sprintf("%s bugün hiç açılmadı", str(p, "hostname"))
+			case "went_offline":
+				return fmt.Sprintf("%s gün içinde çevrimdışı oldu (%d dk görülmedi)", str(p, "hostname"), int(num(p, "minutes")))
+			case "stale":
+				return fmt.Sprintf("%s uzun süredir sessiz (%d gündür görülmedi) — kullanılmıyorsa arşivleyin", str(p, "hostname"), int(num(p, "days")))
+			}
 			return fmt.Sprintf("%s çevrimdışı (%d dk görülmedi)", str(p, "hostname"), int(num(p, "minutes")))
 		},
 		LangEN: func(p Params) string {
+			switch str(p, "kind") {
+			case "not_started":
+				return fmt.Sprintf("%s has not been switched on today", str(p, "hostname"))
+			case "went_offline":
+				return fmt.Sprintf("%s went offline during the day (not seen for %d min)", str(p, "hostname"), int(num(p, "minutes")))
+			case "stale":
+				return fmt.Sprintf("%s has been silent for a long time (not seen for %d days) — archive it if it is no longer in use", str(p, "hostname"), int(num(p, "days")))
+			}
 			return fmt.Sprintf("%s is offline (not seen for %d min)", str(p, "hostname"), int(num(p, "minutes")))
 		},
 	},
@@ -99,9 +116,15 @@ var messages = map[string]map[string]renderer{
 	},
 	"crash_storm": {
 		LangTR: func(p Params) string {
+			if app := str(p, "app"); app != "" {
+				return fmt.Sprintf("%s son %d dk'da %d çökme (en sık: %s)", str(p, "hostname"), int(num(p, "window_minutes")), int(num(p, "count")), app)
+			}
 			return fmt.Sprintf("%s son %d dk'da %d çökme", str(p, "hostname"), int(num(p, "window_minutes")), int(num(p, "count")))
 		},
 		LangEN: func(p Params) string {
+			if app := str(p, "app"); app != "" {
+				return fmt.Sprintf("%s had %d crashes in the last %d min (mostly %s)", str(p, "hostname"), int(num(p, "count")), int(num(p, "window_minutes")), app)
+			}
 			return fmt.Sprintf("%s had %d crashes in the last %d min", str(p, "hostname"), int(num(p, "count")), int(num(p, "window_minutes")))
 		},
 	},

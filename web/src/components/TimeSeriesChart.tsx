@@ -28,6 +28,8 @@ interface TimeSeriesChartProps {
   unit?: Unit
   yDomain?: [number, number]
   emptyLabel?: string
+  /** Hide the built-in legend when the caller renders its own (e.g. stat tiles). */
+  hideLegend?: boolean
 }
 
 function formatValue(v: number, unit: Unit): string {
@@ -81,6 +83,7 @@ export function TimeSeriesChart({
   unit = 'percent',
   yDomain,
   emptyLabel,
+  hideLegend = false,
 }: TimeSeriesChartProps) {
   const t = useT()
   const id = useId()
@@ -107,7 +110,7 @@ export function TimeSeriesChart({
 
   return (
     <div>
-      {series.length >= 2 && (
+      {series.length >= 2 && !hideLegend && (
         <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1.5">
           {drawn.map((s) => (
             <span key={s.key} className="inline-flex items-center gap-1.5 text-[12px] text-text-muted">
@@ -140,6 +143,7 @@ export function TimeSeriesChart({
           <YAxis
             domain={domain}
             width={48}
+            allowDecimals={unit !== 'number'}
             tick={{ fill: axisText, fontSize: 11 }}
             tickFormatter={(v: number) => formatValue(v, unit)}
             tickLine={false}

@@ -94,10 +94,11 @@ export const format: Shape<typeof tr.format> = {
 export const nav: Shape<typeof tr.nav> = {
   overview: 'Overview',
   devices: 'Devices',
-  slowMachines: 'Slow Machines',
+  slowMachines: 'Slow Devices',
   users: 'Users',
   departments: 'Departments',
   alerts: 'Alerts',
+  optimization: 'Optimization',
   settings: 'Settings',
   setup: 'Setup',
   profile: 'Profile',
@@ -171,6 +172,7 @@ export const errors: Shape<typeof tr.errors> = {
   unsupported_media_type: 'The request format is not supported.',
   category_rule_conflict: 'A rule with the same match type and value already exists.',
   too_many_items: 'Too many items were selected for one request.',
+  machine_not_archived: 'Only archived machines can be deleted permanently. Refresh the list and try again.',
   too_many_itemsMax: 'At most {max} items can be processed in one request.',
   dry_run_required: 'Run in dry-run mode first and observe at least one result.',
   unknown_catalog_item: 'The selected item is not in the catalog. Refresh the page and try again.',
@@ -193,6 +195,9 @@ export const category: Shape<typeof tr.category> = {
   dev: 'Development',
   media: 'Media',
   comms: 'Communication',
+  remote: 'Remote Access',
+  security: 'Security',
+  utility: 'Drivers & Utilities',
   system: 'System',
   other: 'Other',
 }
@@ -238,7 +243,7 @@ export const rule: Shape<typeof tr.rule> = {
 }
 
 export const ruleHelp: Shape<typeof tr.ruleHelp> = {
-  offline: 'How long the machine has not been seen (seconds).',
+  offline: 'How long the machine has not been seen (seconds). Work-hours machines: only during work hours — Info if not switched on today, Warning if it went offline during the day; one lasting Info alert once silent for long.',
   cpu_high: 'Average CPU usage over the duration (%).',
   mem_high: 'Average memory usage over the duration (%).',
   ram_high: 'Average memory usage over the duration (%).',
@@ -253,6 +258,11 @@ export const ruleHelp: Shape<typeof tr.ruleHelp> = {
 export const alertText: Shape<typeof tr.alertText> = {
   offline: '{host} is offline (not seen for {duration})',
   offlineBare: '{host} is offline',
+  offlineNotStarted: '{host} has not been switched on today',
+  offlineWentOffline: '{host} went offline during the day (not seen for {duration})',
+  offlineWentOfflineBare: '{host} went offline during the day',
+  offlineStale: '{host} has been silent for a long time (not seen for {duration}) — archive it if it is no longer in use',
+  offlineStaleBare: '{host} has been silent for a long time — archive it if it is no longer in use',
   cpu_high: 'CPU usage is high on {host}: {value}',
   cpu_highBare: 'CPU usage is high on {host}',
   mem_high: 'Memory usage is high on {host}: {value}',
@@ -263,6 +273,7 @@ export const alertText: Shape<typeof tr.alertText> = {
   smart_fail: 'Disk {disk} on {host} reports a SMART failure',
   smart_failBare: 'A disk on {host} reports a SMART failure',
   crash_storm: plural('{host} had {count} crash in the last {duration}', '{host} had {count} crashes in the last {duration}'),
+  crash_stormApp: plural('{app} crashed {count} time on {host} in the last {duration}', '{app} crashed {count} times on {host} in the last {duration}'),
   crash_stormNoWindow: plural('{count} application crash on {host}', '{count} application crashes on {host}'),
   crash_stormBare: 'Frequent application crashes on {host}',
   net_high: 'Network traffic is high on {host}: {value}',

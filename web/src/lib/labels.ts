@@ -4,7 +4,7 @@
 // with a label and (where shown) an icon.
 import type { LucideIcon } from 'lucide-react'
 import {
-  Globe, FileText, Code2, Clapperboard, MessagesSquare, Cog, Boxes,
+  Globe, FileText, Code2, Clapperboard, MessagesSquare, Cog, Boxes, ShieldCheck, ScreenShare, Wrench,
   MemoryStick, HardDrive, Cpu, HeartPulse, Bug, RotateCcw,
   Gamepad2, PackageOpen,
 } from 'lucide-react'
@@ -49,7 +49,13 @@ export interface CategoryMeta {
   icon: LucideIcon
 }
 
-export const CATEGORY_ORDER = ['browser', 'office', 'dev', 'media', 'comms', 'system', 'other'] as const
+export const CATEGORY_ORDER = [
+  'browser', 'office', 'dev', 'media', 'comms', 'remote', 'security', 'utility', 'system', 'other',
+] as const
+
+/** Background categories the server leaves out of usage breakdowns (mirrors
+ *  isSystemCat in server/internal/api/users.go). */
+export const OVERHEAD_CATEGORIES: readonly string[] = ['system', 'security', 'utility']
 
 const CATEGORY_VISUAL: Record<string, { color: string; icon: LucideIcon }> = {
   browser: { color: 'var(--color-cat-browser)', icon: Globe },
@@ -57,6 +63,9 @@ const CATEGORY_VISUAL: Record<string, { color: string; icon: LucideIcon }> = {
   dev: { color: 'var(--color-cat-dev)', icon: Code2 },
   media: { color: 'var(--color-cat-media)', icon: Clapperboard },
   comms: { color: 'var(--color-cat-comms)', icon: MessagesSquare },
+  remote: { color: 'var(--color-cat-remote)', icon: ScreenShare },
+  security: { color: 'var(--color-cat-security)', icon: ShieldCheck },
+  utility: { color: 'var(--color-cat-utility)', icon: Wrench },
   system: { color: 'var(--color-cat-system)', icon: Cog },
   other: { color: 'var(--color-cat-other)', icon: Boxes },
 }

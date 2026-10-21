@@ -40,6 +40,9 @@ export function Users() {
     {
       key: 'user',
       header: t('common.user'),
+      // Fixed share of the width: under auto layout every page re-sized the
+      // columns to its own longest name, so the table jumped while paging.
+      headerClassName: 'w-[32%]',
       sortable: true,
       sortValue: (u) => u.display_name?.trim() || displayUser(u.logon_user),
       render: (u) => {
@@ -47,7 +50,7 @@ export function Users() {
         const heading = u.display_name?.trim() || name
         return (
           <div className="flex items-center gap-2.5">
-            <span className="grid size-8 place-items-center rounded-full bg-accent-grad-soft text-[13px] font-bold text-accent">
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-accent-grad-soft text-[13px] font-bold text-accent">
               {initialOf(heading)}
             </span>
             <div className="min-w-0">
@@ -61,6 +64,7 @@ export function Users() {
     {
       key: 'tags',
       header: t('usersPage.department'),
+      headerClassName: 'w-[26%]',
       render: (u) => {
         const list = u.tags ?? []
         if (list.length === 0) return <span className="text-text-dim">—</span>
@@ -77,6 +81,7 @@ export function Users() {
     {
       key: 'status',
       header: t('common.status'),
+      headerClassName: 'w-[13%]',
       sortable: true,
       sortValue: (u) => (u.online ? 0 : 1),
       render: (u) =>
@@ -93,6 +98,7 @@ export function Users() {
     {
       key: 'machine',
       header: t('usersPage.currentMachine'),
+      headerClassName: 'w-[15%]',
       sortable: true,
       sortValue: (u) => u.current_machine ?? '',
       render: (u) => <span className="text-text-muted">{u.current_machine || '—'}</span>,
@@ -151,6 +157,7 @@ export function Users() {
             emptyLabel={untagged ? t('usersPage.emptyUntagged') : tag ? t('usersPage.emptyDept') : t('usersPage.empty')}
             className="border-0"
             pageSize={25}
+            pagerClassName="px-4 pb-3.5"
           />
         )}
       </Card>

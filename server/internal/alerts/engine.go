@@ -7,14 +7,18 @@ package alerts
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/aliyalinkilic/tolikopa/server/internal/config"
 	"github.com/aliyalinkilic/tolikopa/server/internal/model"
+	"github.com/aliyalinkilic/tolikopa/server/internal/workhours"
 )
 
 const (
@@ -25,8 +29,14 @@ const (
 	// going briefly online then offline stays under ONE open alert instead of
 	// re-firing a new one (with a new notification) on every cycle.
 	resolveGrace = 10 * time.Minute
-	kindActive   = "active"
-	kindLoggedOn = "logged_on"
+	// crashResolveGrace is resolveGrace for crash_storm (see resolveGraceFor).
+	crashResolveGrace = time.Hour
+	// usageHysteresis / diskHysteresis: percentage points an open cpu/mem (resp.
+	// disk_low) alert must clear its threshold by before it counts as clear.
+	usageHysteresis = 5.0
+	diskHysteresis  = 2.0
+	kindActive      = "active"
+	kindLoggedOn    = "logged_on"
 )
 
 // Publisher pushes alert lifecycle events to subscribers (implemented by ws.Hub).
@@ -45,11 +55,16 @@ type Engine struct {
 	// lang is the instance default language (app_setting.default_lang), re-read
 	// at the start of every evaluation. Only the evaluator goroutine touches it.
 	lang string
+
+	// sched is the work-hours schedule, re-read every evaluation (evaluator
+	// goroutine only). A failed read keeps the previous one.
+	sched workhours.Schedule
 }
 
 // NewEngine constructs the engine. pub may be nil (no WS push).
 func NewEngine(pool *pgxpool.Pool, cfg *config.Config, pub Publisher) *Engine {
-	return &Engine{pool: pool, cfg: cfg, pub: pub, lastProcessed: time.Now().Add(-15 * time.Minute), lang: LangTR}
+	return &Engine{pool: pool, cfg: cfg, pub: pub, lastProcessed: time.Now().Add(-15 * time.Minute), lang: LangTR,
+		sched: workhours.Compile(workhours.Default())}
 }
 
 // Run evaluates rules + derives sessions every evalInterval until ctx is done.
@@ -132,8 +147,10 @@ func (e *Engine) evaluate(ctx context.Context) error {
 		return err
 	}
 	e.lang = e.loadLang(ctx)
+	e.loadSchedule(ctx)
+	now := time.Now()
 
-	evaluators := map[string]func(context.Context, rule) ([]activeAlert, error){
+	evaluators := map[string]evaluator{
 		"offline":     e.evalOffline,
 		"cpu_high":    e.evalCPU,
 		"mem_high":    e.evalMem,
@@ -144,43 +161,112 @@ func (e *Engine) evaluate(ctx context.Context) error {
 
 	for name, fn := range evaluators {
 		r, ok := rules[name]
-		var actives []activeAlert
+		var res evalResult
 		if ok && r.enabled {
-			actives, err = fn(ctx, r)
+			open, err := e.loadOpen(ctx, name)
+			if err != nil {
+				log.Printf("alerts: rule %s: open alerts: %v", name, err)
+				continue
+			}
+			res, err = fn(ctx, r, open, now)
 			if err != nil {
 				log.Printf("alerts: rule %s: %v", name, err)
 				continue
 			}
 		}
-		if err := e.reconcile(ctx, name, actives); err != nil {
+		if err := e.reconcile(ctx, name, res); err != nil {
 			log.Printf("alerts: reconcile %s: %v", name, err)
 		}
 	}
 	return nil
 }
 
-// reconcile upserts the active alerts and resolves any open alert of this rule
-// whose condition no longer holds.
-func (e *Engine) reconcile(ctx context.Context, ruleName string, actives []activeAlert) error {
-	keys := make([]string, 0, len(actives))
-	for _, a := range actives {
-		keys = append(keys, a.dedupKey)
+// evaluator computes one rule. open maps the rule's non-resolved dedup keys to
+// their machine id (for hysteresis and "hold" decisions).
+type evaluator func(ctx context.Context, r rule, open map[string]string, now time.Time) (evalResult, error)
+
+// evalResult is what an evaluator decided this round.
+type evalResult struct {
+	// actives: the condition holds — open or refresh.
+	actives []activeAlert
+	// hold: open alerts whose condition cannot be judged now (no fresh data, e.g.
+	// the machine of a disk_low alert is offline). Neither refreshed nor resolved:
+	// a full disk does not become "fixed" because the PC went to sleep.
+	hold []string
+	// clear: open alerts to resolve at once (bypassing the resolve grace), keyed
+	// by dedup key, valued by the reason stored in detail.resolved_reason.
+	clear map[string]string
+}
+
+// loadOpen returns the rule's non-resolved alerts: dedup_key → machine_id.
+func (e *Engine) loadOpen(ctx context.Context, ruleName string) (map[string]string, error) {
+	rows, err := e.pool.Query(ctx,
+		`SELECT dedup_key, COALESCE(machine_id, '') FROM alert WHERE rule=$1 AND status <> 'resolved'`, ruleName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, mid string
+		if err := rows.Scan(&k, &mid); err != nil {
+			return nil, err
+		}
+		out[k] = mid
+	}
+	return out, rows.Err()
+}
+
+// loadSchedule re-reads the work-hours schedule. A failure keeps the previous one.
+func (e *Engine) loadSchedule(ctx context.Context) {
+	w, err := workhours.Load(ctx, e.pool)
+	if err != nil {
+		log.Printf("alerts: work hours: %v", err)
+		return
+	}
+	e.sched = workhours.Compile(w)
+}
+
+// reconcile upserts the active alerts, resolves the ones to clear at once, and
+// resolves any other open alert of this rule whose condition no longer holds.
+func (e *Engine) reconcile(ctx context.Context, ruleName string, res evalResult) error {
+	keep := make([]string, 0, len(res.actives)+len(res.hold)) // never nil: ANY(NULL) matches nothing
+	for _, a := range res.actives {
+		keep = append(keep, a.dedupKey)
 		if err := e.upsert(ctx, a); err != nil {
 			return err
 		}
 	}
+	keep = append(keep, res.hold...)
+
+	var resolvedIDs []int64
+	for key, reason := range res.clear {
+		var id int64
+		err := e.pool.QueryRow(ctx, `
+			UPDATE alert SET status='resolved', resolved_at=now(),
+				detail = detail || jsonb_build_object('resolved_reason', $3::text)
+			WHERE rule=$1 AND dedup_key=$2 AND status<>'resolved'
+			RETURNING id`, ruleName, key, reason).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		resolvedIDs = append(resolvedIDs, id)
+	}
+
 	// Resolve stale alerts — but only once the condition has been clear for
-	// resolveGrace (last_seen_at is refreshed each eval the condition holds), so
-	// brief online blips don't resolve+reopen an offline alert on a loop.
+	// the rule's resolve grace (last_seen_at is refreshed each eval the condition
+	// holds), so brief blips don't resolve+reopen an alert on a loop.
 	rows, err := e.pool.Query(ctx, `
 		UPDATE alert SET status='resolved', resolved_at=now()
 		WHERE rule=$1 AND status<>'resolved' AND NOT (dedup_key = ANY($2))
 		  AND last_seen_at < $3
-		RETURNING id`, ruleName, keys, time.Now().Add(-resolveGrace))
+		RETURNING id`, ruleName, keep, time.Now().Add(-resolveGraceFor(ruleName)))
 	if err != nil {
 		return err
 	}
-	var resolvedIDs []int64
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
@@ -199,6 +285,17 @@ func (e *Engine) reconcile(ctx context.Context, ruleName string, actives []activ
 		}
 	}
 	return nil
+}
+
+// resolveGraceFor is how long a rule's condition must stay clear before its
+// alert resolves. Crash storms get an hour: in the previous installation's data
+// almost every storm was ONE background service crash-looping for days, which
+// at 10 minutes re-opened (and re-notified) the same storm hundreds of times.
+func resolveGraceFor(ruleName string) time.Duration {
+	if ruleName == "crash_storm" {
+		return crashResolveGrace
+	}
+	return resolveGrace
 }
 
 // loadLang reads the instance default language. Any failure keeps the previous
@@ -249,6 +346,8 @@ func (e *Engine) upsert(ctx context.Context, a activeAlert) error {
 		if e.pub != nil {
 			e.pub.PublishAlert("alert.opened", dto)
 		}
+		// Only critical alerts e-mail; info and warning (every work-hours offline
+		// kind included) never do.
 		if a.severity == "critical" {
 			e.sendCriticalEmail(dto, e.lang)
 		}
@@ -258,47 +357,186 @@ func (e *Engine) upsert(ctx context.Context, a activeAlert) error {
 
 // ── Rule evaluators ──────────────────────────────────────────────────────────
 
-func (e *Engine) evalOffline(ctx context.Context, r rule) ([]activeAlert, error) {
+// Offline alert kinds (params.kind) for work-hours devices. Servers' offline
+// alerts carry no kind.
+const (
+	offlineNotStarted  = "not_started"  // not seen at all since today's start (info)
+	offlineWentOffline = "went_offline" // seen today, then went offline (warning)
+	offlineStale       = "stale"        // missed stale_after_days whole work days (info)
+)
+
+// offlineVerdict is the pure offline decision for one machine.
+type offlineVerdict struct {
+	sev       string  // "" = no alert this round
+	thr       float64 // threshold (seconds) that fired; 0 for stale
+	kind      string  // params.kind for work-hours devices
+	workHours bool    // the machine is a work-hours-only device
+	clear     bool    // resolve an open alert now (reason below)
+	reason    string  // detail.resolved_reason when clear
+}
+
+// decideOffline applies the offline rule to one machine last seen at lastSeen.
+// isOpen/openKind describe the machine's currently open offline alert, if any
+// (openKind is its params.kind, "" for alerts written before kinds existed).
+//
+// Machines without a work-hours tag (servers) keep the 24/7 behaviour: warn/crit
+// on seconds since last seen. Work-hours devices (docs/API.md §6.1):
+//   - a device that has missed stale_after_days whole work days is "stale": one
+//     long-lived info alert (kind stale), kept around the clock — it is neither
+//     cleared at the end of the day nor re-opened every morning — until the
+//     device reports again (or is archived);
+//   - otherwise, outside the schedule nothing fires and an open alert is cleared;
+//   - inside it the offline time counts from max(lastSeen, today's start), so a
+//     PC shut down last evening is "offline for 0 min" at 09:00;
+//   - the threshold is max(rule warn, schedule offline_after_minutes) — staff
+//     PCs sleep over lunch; a 5-minute nap is not an incident;
+//   - a NEW alert opens only outside the morning/evening grace (an open one is
+//     kept until the day ends);
+//   - a device not switched on at all today is info (kind not_started), one that
+//     went offline during the day is warning (kind went_offline); never critical:
+//     a staff PC that is off usually means its user is away, which is no reason
+//     for a critical e-mail.
+func decideOffline(warn, crit *float64, s workhours.Schedule, tags []string, now, lastSeen time.Time, isOpen bool, openKind string) offlineVerdict {
+	if !s.Applies(tags) {
+		sev, thr := sevHigh(now.Sub(lastSeen).Seconds(), warn, crit)
+		return offlineVerdict{sev: sev, thr: thr}
+	}
+	v := offlineVerdict{workHours: true}
+	if s.Stale(now, lastSeen) {
+		v.sev, v.kind = "info", offlineStale
+		return v
+	}
+	p := s.OfflinePresence(now, lastSeen)
+	if !p.InHours {
+		v.clear = true
+		v.reason = "work_hours_end"
+		if isOpen && openKind == offlineStale {
+			// No longer stale outside work hours: the device reported again (or
+			// the cutoff was raised) — not a work-hours-end closure.
+			v.reason = "not_stale"
+		}
+		return v
+	}
+	var thr float64
+	switch {
+	case warn != nil:
+		thr = *warn
+	case crit != nil:
+		thr = *crit
+	default:
+		return v // rule has no thresholds at all
+	}
+	if floor := s.OfflineAfter().Seconds(); floor > thr {
+		thr = floor
+	}
+	if p.Age.Seconds() < thr || (!isOpen && !p.MayOpen) {
+		return v
+	}
+	v.thr = thr
+	if p.NotStarted {
+		v.sev, v.kind = "info", offlineNotStarted
+	} else {
+		v.sev, v.kind = "warning", offlineWentOffline
+	}
+	return v
+}
+
+func (e *Engine) evalOffline(ctx context.Context, r rule, open map[string]string, now time.Time) (evalResult, error) {
+	res := evalResult{clear: map[string]string{}}
+	kinds, err := e.openOfflineKinds(ctx)
+	if err != nil {
+		return res, err
+	}
 	rows, err := e.pool.Query(ctx, `
-		SELECT ml.machine_id, m.hostname, EXTRACT(EPOCH FROM (now()-ml.ts))::float8
+		SELECT ml.machine_id, m.hostname, ml.ts, m.tags
 		FROM machine_live ml JOIN machine m ON m.machine_id=ml.machine_id
 		WHERE m.archived_at IS NULL`)
+	if err != nil {
+		return res, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mid, host string
+		var seen time.Time
+		var tags []string
+		if err := rows.Scan(&mid, &host, &seen, &tags); err != nil {
+			return res, err
+		}
+		key := "offline:" + mid
+		_, isOpen := open[key]
+		d := decideOffline(r.warn, r.crit, e.sched, tags, now, seen, isOpen, kinds[key])
+		if d.clear {
+			if isOpen {
+				res.clear[key] = d.reason
+			}
+			continue
+		}
+		if d.sev == "" {
+			continue
+		}
+		age := now.Sub(seen).Seconds()
+		if age < 0 {
+			age = 0
+		}
+		v := age
+		detail := Params{"age_seconds": int(age), "minutes": int(age / 60), "unit": "s"}
+		if d.kind == offlineStale {
+			detail["days"] = int(age / 86400)
+			detail["stale_after_days"] = e.sched.StaleAfterDays()
+			detail["last_seen"] = seen.UTC().Format(time.RFC3339)
+		} else {
+			detail["threshold"] = d.thr
+		}
+		if d.workHours {
+			detail["work_hours"] = true
+		}
+		if d.kind != "" {
+			detail["kind"] = d.kind
+		}
+		res.actives = append(res.actives, activeAlert{
+			machineID: mid, hostname: host, rule: "offline", dedupKey: key,
+			severity: d.sev, value: &v, detail: detail,
+		})
+	}
+	return res, rows.Err()
+}
+
+// openOfflineKinds maps the dedup key of every open offline alert to its
+// params.kind ("" when unset).
+func (e *Engine) openOfflineKinds(ctx context.Context) (map[string]string, error) {
+	rows, err := e.pool.Query(ctx, `
+		SELECT dedup_key, COALESCE(detail->>'kind', '') FROM alert
+		WHERE rule='offline' AND status <> 'resolved'`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []activeAlert
+	out := map[string]string{}
 	for rows.Next() {
-		var mid, host string
-		var age float64
-		if err := rows.Scan(&mid, &host, &age); err != nil {
+		var k, kind string
+		if err := rows.Scan(&k, &kind); err != nil {
 			return nil, err
 		}
-		sev, thr := sevHigh(age, r.warn, r.crit)
-		if sev == "" {
-			continue
-		}
-		v := age
-		out = append(out, activeAlert{
-			machineID: mid, hostname: host, rule: "offline", dedupKey: "offline:" + mid,
-			severity: sev, value: &v,
-			detail: Params{"age_seconds": int(age), "minutes": int(age / 60), "threshold": thr, "unit": "s"},
-		})
+		out[k] = kind
 	}
 	return out, rows.Err()
 }
 
-func (e *Engine) evalCPU(ctx context.Context, r rule) ([]activeAlert, error) {
-	return e.evalSustained(ctx, r, "cpu_high", "avg(ms.cpu_avg)")
+func (e *Engine) evalCPU(ctx context.Context, r rule, open map[string]string, _ time.Time) (evalResult, error) {
+	return e.evalSustained(ctx, r, open, "cpu_high", "avg(ms.cpu_avg)")
 }
 
-func (e *Engine) evalMem(ctx context.Context, r rule) ([]activeAlert, error) {
-	return e.evalSustained(ctx, r, "mem_high", "avg(ms.mem_ratio_avg)*100")
+func (e *Engine) evalMem(ctx context.Context, r rule, open map[string]string, _ time.Time) (evalResult, error) {
+	return e.evalSustained(ctx, r, open, "mem_high", "avg(ms.mem_ratio_avg)*100")
 }
 
 // evalSustained evaluates a metric_5m-based threshold over the rule's for_seconds
-// window (real-time aggregation keeps the live edge fresh).
-func (e *Engine) evalSustained(ctx context.Context, r rule, ruleName, expr string) ([]activeAlert, error) {
+// window (real-time aggregation keeps the live edge fresh). An open alert stays
+// open until the value falls usageHysteresis points below the threshold: in the
+// previous installation's data most mem_high alerts sat at 90–91 % against a
+// 90 % threshold and re-opened within 30 minutes.
+func (e *Engine) evalSustained(ctx context.Context, r rule, open map[string]string, ruleName, expr string) (evalResult, error) {
+	var res evalResult
 	win := float64(r.forSeconds)
 	if win <= 0 {
 		win = 300
@@ -310,35 +548,37 @@ func (e *Engine) evalSustained(ctx context.Context, r rule, ruleName, expr strin
 		GROUP BY ms.machine_id, m.hostname`, expr)
 	rows, err := e.pool.Query(ctx, q, win)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	defer rows.Close()
-	var out []activeAlert
 	for rows.Next() {
 		var mid, host string
-		var v float64
+		var v *float64
 		var cnt int
 		if err := rows.Scan(&mid, &host, &v, &cnt); err != nil {
-			return nil, err
+			return res, err
 		}
-		if cnt < 1 {
+		if cnt < 1 || v == nil {
 			continue
 		}
-		sev, thr := sevHigh(v, r.warn, r.crit)
+		key := ruleName + ":" + mid
+		_, isOpen := open[key]
+		sev, thr := sevHighHyst(*v, r.warn, r.crit, isOpen, usageHysteresis)
 		if sev == "" {
 			continue
 		}
-		val := v
-		out = append(out, activeAlert{
-			machineID: mid, hostname: host, rule: ruleName, dedupKey: ruleName + ":" + mid,
+		val := *v
+		res.actives = append(res.actives, activeAlert{
+			machineID: mid, hostname: host, rule: ruleName, dedupKey: key,
 			severity: sev, value: &val,
-			detail: Params{"value": v, "threshold": thr, "unit": "%", "window_seconds": int(win)},
+			detail: Params{"value": val, "threshold": thr, "unit": "%", "window_seconds": int(win)},
 		})
 	}
-	return out, rows.Err()
+	return res, rows.Err()
 }
 
-func (e *Engine) evalDiskLow(ctx context.Context, r rule) ([]activeAlert, error) {
+func (e *Engine) evalDiskLow(ctx context.Context, r rule, open map[string]string, _ time.Time) (evalResult, error) {
+	var res evalResult
 	// Latest usage per machine+mount; time-bounded so only recent chunks scan.
 	rows, err := e.pool.Query(ctx, `
 		SELECT DISTINCT ON (dus.machine_id, dus.mount)
@@ -350,93 +590,144 @@ func (e *Engine) evalDiskLow(ctx context.Context, r rule) ([]activeAlert, error)
 		WHERE dus.ts >= now() - interval '2 hours' AND m.archived_at IS NULL
 		ORDER BY dus.machine_id, dus.mount, dus.ts DESC`)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	defer rows.Close()
-	var out []activeAlert
+	reporting := map[string]bool{}
 	for rows.Next() {
 		var mid, host, mount string
 		var free *float64
 		if err := rows.Scan(&mid, &host, &mount, &free); err != nil {
-			return nil, err
+			return res, err
 		}
+		reporting[mid] = true
 		if free == nil {
 			continue
 		}
-		sev, thr := sevLow(*free, r.warn, r.crit)
+		key := "disk_low:" + mid + ":" + mount
+		_, isOpen := open[key]
+		sev, thr := sevLowHyst(*free, r.warn, r.crit, isOpen, diskHysteresis)
 		if sev == "" {
 			continue
 		}
 		v := *free
-		out = append(out, activeAlert{
+		res.actives = append(res.actives, activeAlert{
 			machineID: mid, hostname: host, rule: "disk_low",
-			dedupKey: "disk_low:" + mid + ":" + mount, severity: sev, value: &v,
+			dedupKey: key, severity: sev, value: &v,
 			detail: Params{"mount": mount, "free_pct": *free, "threshold": thr, "unit": "%"},
 		})
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
+	// A machine that sent no disk sample for 2 h (switched off, asleep) has not
+	// freed any space: keep its alerts as they are. Without this every evening
+	// shutdown resolved the alert and the next morning re-opened it — one disk
+	// in the old data had 137 alerts for the same nearly full C:.
+	res.hold = holdSilent(open, reporting)
+	return res, nil
 }
 
-func (e *Engine) evalSmart(ctx context.Context, r rule) ([]activeAlert, error) {
+// holdSilent returns the open alert keys whose machine did not report.
+func holdSilent(open map[string]string, reporting map[string]bool) []string {
+	var out []string
+	for key, mid := range open {
+		if mid != "" && !reporting[mid] {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+func (e *Engine) evalSmart(ctx context.Context, r rule, _ map[string]string, _ time.Time) (evalResult, error) {
+	var res evalResult
 	rows, err := e.pool.Query(ctx, `
 		SELECT dh.machine_id, m.hostname, dh.disk, dh.smart_ok, dh.predict_fail
 		FROM disk_health dh JOIN machine m ON m.machine_id=dh.machine_id
 		WHERE (dh.predict_fail = true OR dh.smart_ok = false) AND m.archived_at IS NULL`)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	defer rows.Close()
-	var out []activeAlert
 	for rows.Next() {
 		var mid, host, disk string
 		var smartOK, predictFail *bool
 		if err := rows.Scan(&mid, &host, &disk, &smartOK, &predictFail); err != nil {
-			return nil, err
+			return res, err
 		}
-		out = append(out, activeAlert{
+		res.actives = append(res.actives, activeAlert{
 			machineID: mid, hostname: host, rule: "smart_fail",
 			dedupKey: "smart_fail:" + mid + ":" + disk, severity: "critical",
 			detail: Params{"disk": disk, "smart_ok": smartOK, "predict_fail": predictFail},
 		})
 	}
-	return out, rows.Err()
+	return res, rows.Err()
 }
 
-func (e *Engine) evalCrashStorm(ctx context.Context, r rule) ([]activeAlert, error) {
+// ignoredApps reads crash_storm params.ignore_apps: process base names (case-
+// insensitive, ".exe" optional) whose crashes never count toward a storm.
+func ignoredApps(params map[string]any) []string {
+	out := []string{}
+	list, _ := params["ignore_apps"].([]any)
+	for _, v := range list {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		s = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".exe")
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (e *Engine) evalCrashStorm(ctx context.Context, r rule, _ map[string]string, _ time.Time) (evalResult, error) {
+	var res evalResult
 	win := 600.0
 	if r.params != nil {
 		if w, ok := r.params["window_seconds"].(float64); ok && w > 0 {
 			win = w
 		}
 	}
+	// app is the most frequent faulting process base name in the window, apps
+	// the number of distinct ones — almost every storm is one crash-looping app.
 	rows, err := e.pool.Query(ctx, `
-		SELECT e.machine_id, m.hostname, count(*)::float8
+		SELECT e.machine_id, m.hostname, count(*)::float8,
+		       mode() WITHIN GROUP (ORDER BY lower(e.process_name)),
+		       count(DISTINCT lower(e.process_name))::int
 		FROM event e JOIN machine m ON m.machine_id=e.machine_id
-		WHERE e.kind IN ('app_crash','app_hang') AND e.ts >= now() - make_interval(secs => $1) AND m.archived_at IS NULL
-		GROUP BY e.machine_id, m.hostname`, win)
+		WHERE e.kind IN ('app_crash','app_hang') AND e.ts >= now() - make_interval(secs => $1)
+		  AND m.archived_at IS NULL
+		  AND NOT (regexp_replace(lower(COALESCE(e.process_name, '')), '\.exe$', '') = ANY($2))
+		GROUP BY e.machine_id, m.hostname`, win, ignoredApps(r.params))
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	defer rows.Close()
-	var out []activeAlert
 	for rows.Next() {
 		var mid, host string
 		var cnt float64
-		if err := rows.Scan(&mid, &host, &cnt); err != nil {
-			return nil, err
+		var app *string
+		var apps int
+		if err := rows.Scan(&mid, &host, &cnt, &app, &apps); err != nil {
+			return res, err
 		}
 		sev, thr := sevHigh(cnt, r.warn, r.crit)
 		if sev == "" {
 			continue
 		}
 		v := cnt
-		out = append(out, activeAlert{
+		detail := Params{"count": int(cnt), "window_seconds": int(win), "window_minutes": int(win / 60), "threshold": thr, "apps": apps}
+		if app != nil && *app != "" {
+			detail["app"] = *app
+		}
+		res.actives = append(res.actives, activeAlert{
 			machineID: mid, hostname: host, rule: "crash_storm", dedupKey: "crash_storm:" + mid,
-			severity: sev, value: &v,
-			detail: Params{"count": int(cnt), "window_seconds": int(win), "window_minutes": int(win / 60), "threshold": thr},
+			severity: sev, value: &v, detail: detail,
 		})
 	}
-	return out, rows.Err()
+	return res, rows.Err()
 }
 
 // ── usage_session derivation ─────────────────────────────────────────────────
@@ -587,6 +878,43 @@ func sevHigh(v float64, warn, crit *float64) (string, float64) {
 	}
 	if warn != nil && v >= *warn {
 		return "warning", *warn
+	}
+	return "", 0
+}
+
+// sevHighHyst is sevHigh with hysteresis: an alert that is already open keeps
+// (at least) warning until v drops margin below the threshold it would need.
+func sevHighHyst(v float64, warn, crit *float64, open bool, margin float64) (string, float64) {
+	sev, thr := sevHigh(v, warn, crit)
+	if sev != "" || !open {
+		return sev, thr
+	}
+	if warn != nil {
+		if v >= *warn-margin {
+			return "warning", *warn
+		}
+		return "", 0
+	}
+	if crit != nil && v >= *crit-margin {
+		return "critical", *crit
+	}
+	return "", 0
+}
+
+// sevLowHyst is sevHighHyst for "lower is worse" values.
+func sevLowHyst(v float64, warn, crit *float64, open bool, margin float64) (string, float64) {
+	sev, thr := sevLow(v, warn, crit)
+	if sev != "" || !open {
+		return sev, thr
+	}
+	if warn != nil {
+		if v <= *warn+margin {
+			return "warning", *warn
+		}
+		return "", 0
+	}
+	if crit != nil && v <= *crit+margin {
+		return "critical", *crit
 	}
 	return "", 0
 }

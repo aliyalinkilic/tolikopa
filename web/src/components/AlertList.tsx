@@ -20,6 +20,11 @@ const severityIcon: Record<StatusToken, LucideIcon> = {
   offline: Info,
 }
 
+/** Closed by the engine because work hours ended (detail.resolved_reason). */
+function workHoursEnd(a: AlertDTO): boolean {
+  return a.status === 'resolved' && (a.params?.resolved_reason ?? a.detail?.resolved_reason) === 'work_hours_end'
+}
+
 interface AlertListProps {
   alerts: AlertDTO[]
   onAck?: (id: number) => void
@@ -53,7 +58,11 @@ export function AlertList({ alerts, onAck, ackingId, showMachine = true, emptyLa
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span className="text-[14px] font-semibold text-text">{ruleLabel(a.rule)}</span>
                 <Badge tone={tone}>{severityLabel(a.severity)}</Badge>
-                {!isOpen && <Badge tone="neutral">{alertStatusLabel(a.status)}</Badge>}
+                {!isOpen && (
+                  <Badge tone="neutral" title={workHoursEnd(a) ? t('alertsPage.resolvedWorkHoursTitle') : undefined}>
+                    {workHoursEnd(a) ? t('alertsPage.resolvedWorkHours') : alertStatusLabel(a.status)}
+                  </Badge>
+                )}
               </div>
               <p className="mt-0.5 truncate text-[13px] text-text-muted">{alertMessage(a)}</p>
               <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[12px] text-text-dim">

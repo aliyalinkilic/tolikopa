@@ -3,8 +3,8 @@ import type { CSSProperties, FormEvent, ReactNode } from 'react'
 import { Link, NavLink, useLocation, useNavigate, useOutlet } from 'react-router-dom'
 import { AnimatePresence, motion } from 'motion/react'
 import {
-  BellRing, Building2, Gauge, LayoutDashboard, LogOut, Menu, Monitor, PanelLeft, Rocket, Search, Settings, UserRound,
-  TriangleAlert, Users, X,
+  BellRing, Building2, Gauge, LayoutDashboard, LogOut, Menu, Monitor, PanelLeft, Rocket, Search, Settings, Sparkles,
+  UserRound, TriangleAlert, Users, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Logo, LogoMark } from './Logo'
@@ -27,20 +27,49 @@ interface NavItem {
   label: TKey
   icon: LucideIcon
   adminOnly?: boolean
+  /** Active only on the exact path (otherwise also on its sub-paths). */
   end?: boolean
+  /** Other path prefixes that belong to this item (a detail page reached from it). */
+  match?: string[]
+  /** Sub-menu: shown nested under the item; the item reads as active while one is. */
+  children?: NavItem[]
 }
 
 const NAV: NavItem[] = [
   { to: '/', label: 'nav.overview', icon: LayoutDashboard, end: true },
-  { to: '/devices', label: 'nav.devices', icon: Monitor },
-  { to: '/slow-machines', label: 'nav.slowMachines', icon: Gauge },
-  { to: '/users', label: 'nav.users', icon: Users },
-  { to: '/departments', label: 'nav.departments', icon: Building2 },
+  {
+    to: '/devices',
+    label: 'nav.devices',
+    icon: Monitor,
+    match: ['/machines'],
+    children: [{ to: '/slow-machines', label: 'nav.slowMachines', icon: Gauge }],
+  },
+  {
+    to: '/users',
+    label: 'nav.users',
+    icon: Users,
+    children: [{ to: '/departments', label: 'nav.departments', icon: Building2 }],
+  },
   { to: '/alerts', label: 'nav.alerts', icon: BellRing },
+  { to: '/optimization', label: 'nav.optimization', icon: Sparkles, adminOnly: true },
   // Open to everyone: the General tab holds each user's theme and language.
   { to: '/settings', label: 'nav.settings', icon: Settings },
-  { to: '/setup', label: 'nav.setup', icon: Rocket, adminOnly: true },
 ]
+
+/** Setup lives in the sidebar footer, next to the version line — not in the main list. */
+const SETUP_NAV: NavItem = { to: '/setup', label: 'nav.setup', icon: Rocket, adminOnly: true }
+
+function pathMatches(pathname: string, prefix: string, end?: boolean): boolean {
+  if (end || prefix === '/') return pathname === prefix
+  return pathname === prefix || pathname.startsWith(`${prefix}/`)
+}
+
+/** 'self' when the item's own page is open, 'child' when one of its sub-items is. */
+function navState(item: NavItem, pathname: string): 'self' | 'child' | null {
+  if (pathMatches(pathname, item.to, item.end) || item.match?.some((p) => pathMatches(pathname, p))) return 'self'
+  if (item.children?.some((c) => navState(c, pathname) !== null)) return 'child'
+  return null
+}
 
 /** First path segment → page name, for the document title. */
 const TITLES: Record<string, TKey> = {
@@ -51,6 +80,7 @@ const TITLES: Record<string, TKey> = {
   users: 'nav.users',
   departments: 'nav.departments',
   alerts: 'nav.alerts',
+  optimization: 'nav.optimization',
   settings: 'nav.settings',
   setup: 'nav.setup',
   profile: 'nav.profile',
@@ -157,6 +187,7 @@ function SidebarContent({
 }) {
   const t = useT()
   const isAdmin = useIsAdmin()
+  const { pathname } = useLocation()
   const { data: summary } = useFleetSummary()
   const { data: pub } = usePublicSettings()
   const alertTotal = summary ? Object.values(summary.alerts_by_severity ?? {}).reduce((a, b) => a + b, 0) : 0
@@ -178,49 +209,31 @@ function SidebarContent({
         ) : null}
       </div>
 
-      <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label={t('shell.mainNav')}>
-        {NAV.filter((n) => !n.adminOnly || isAdmin).map((item) => {
-          const badge = item.to === '/alerts' && alertTotal > 0 ? alertTotal : undefined
-          const label = t(item.label)
-          return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              title={collapsed ? label : undefined}
-              aria-label={collapsed ? label : undefined}
-              className={({ isActive }) =>
-                cn(
-                  'group relative flex items-center gap-3 rounded-[var(--radius-md)] px-3 py-2.5 text-[14px] font-medium transition-colors ring-focus',
-                  collapsed && 'justify-center px-0',
-                  isActive ? 'bg-accent-grad-soft text-text' : 'text-text-muted hover:bg-glass hover:text-text',
-                )
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  {isActive && (
-                    <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-accent-grad" aria-hidden />
-                  )}
-                  <item.icon className={cn('size-[18px] shrink-0', isActive && 'text-accent')} aria-hidden />
-                  {!collapsed && <span className="flex-1">{label}</span>}
-                  {!collapsed && badge !== undefined && (
-                    <Badge tone={alertTone as 'crit' | 'warn'}>
-                      <span className="tabular">{badge}</span>
-                    </Badge>
-                  )}
-                  {collapsed && badge !== undefined && (
-                    <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-crit" aria-hidden />
-                  )}
-                </>
-              )}
-            </NavLink>
-          )
-        })}
+      <nav className="flex-1 overflow-y-auto p-3" aria-label={t('shell.mainNav')}>
+        <ul className="space-y-1">
+          {NAV.filter((n) => !n.adminOnly || isAdmin).map((item) => {
+            const badge = item.to === '/alerts' && alertTotal > 0 ? alertTotal : undefined
+            const state = navState(item, pathname)
+            const children = (item.children ?? []).filter((c) => !c.adminOnly || isAdmin)
+            return (
+              <li key={item.to}>
+                <NavRow
+                  item={item}
+                  state={state}
+                  collapsed={collapsed}
+                  badge={badge !== undefined ? { count: badge, tone: alertTone } : undefined}
+                />
+                {children.length > 0 && (
+                  <SubNav items={children} pathname={pathname} collapsed={collapsed} parentLabel={t(item.label)} />
+                )}
+              </li>
+            )
+          })}
+        </ul>
       </nav>
 
-      {(onToggle || pub?.version) && (
-        <div className="border-t border-border p-3">
+      {(onToggle || pub?.version || isAdmin) && (
+        <div className="space-y-0.5 border-t border-border p-3">
           {onToggle && (
             <button
               type="button"
@@ -235,10 +248,155 @@ function SidebarContent({
               {!collapsed && <span>{t('shell.collapse')}</span>}
             </button>
           )}
+          {isAdmin && <FooterLink item={SETUP_NAV} active={navState(SETUP_NAV, pathname) !== null} collapsed={collapsed} />}
           {!collapsed && pub?.version && <VersionLine version={pub.version} />}
         </div>
       )}
     </>
+  )
+}
+
+type NavState = ReturnType<typeof navState>
+
+/** A primary nav entry. `state` is computed by the shell (not NavLink's own
+ *  matching) so a parent can light up for its sub-items and detail pages. */
+function NavRow({
+  item,
+  state,
+  collapsed,
+  badge,
+}: {
+  item: NavItem
+  state: NavState
+  collapsed: boolean
+  badge?: { count: number; tone: 'crit' | 'warn' }
+}) {
+  const t = useT()
+  const label = t(item.label)
+  const self = state === 'self'
+  return (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      title={collapsed ? label : undefined}
+      aria-label={collapsed ? label : undefined}
+      className={cn(
+        'group relative flex items-center gap-3 rounded-[var(--radius-md)] px-3 py-2.5 text-[14px] font-medium transition-colors ring-focus',
+        collapsed && 'justify-center px-0',
+        self
+          ? 'bg-accent-grad-soft text-text'
+          : state === 'child'
+            ? 'text-text hover:bg-glass'
+            : 'text-text-muted hover:bg-glass hover:text-text',
+      )}
+    >
+      {self && <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-accent-grad" aria-hidden />}
+      <item.icon className={cn('size-[18px] shrink-0', state !== null && 'text-accent')} aria-hidden />
+      {!collapsed && <span className="flex-1">{label}</span>}
+      {!collapsed && badge && (
+        <Badge tone={badge.tone}>
+          <span className="tabular">{badge.count}</span>
+        </Badge>
+      )}
+      {collapsed && badge && <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-crit" aria-hidden />}
+    </NavLink>
+  )
+}
+
+/**
+ * Nested entries under a primary item. Expanded: indented under a guide line
+ * that starts at the parent's icon, the active child marking its segment of the
+ * line. Collapsed rail: smaller icon-only buttons tucked under the parent, so the
+ * hierarchy still reads and every page stays one click (and one Tab) away.
+ */
+function SubNav({
+  items,
+  pathname,
+  collapsed,
+  parentLabel,
+}: {
+  items: NavItem[]
+  pathname: string
+  collapsed: boolean
+  parentLabel: string
+}) {
+  const t = useT()
+
+  if (collapsed) {
+    return (
+      <ul className="mt-0.5 flex flex-col items-center gap-0.5" aria-label={parentLabel}>
+        {items.map((c) => {
+          const active = navState(c, pathname) !== null
+          const label = t(c.label)
+          return (
+            <li key={c.to} className="flex flex-col items-center">
+              <span className="h-1.5 w-px bg-border-2" aria-hidden />
+              <NavLink
+                to={c.to}
+                end={c.end}
+                title={label}
+                aria-label={label}
+                className={cn(
+                  'grid size-8 place-items-center rounded-[var(--radius-md)] transition-colors ring-focus',
+                  active ? 'bg-accent-grad-soft text-accent' : 'text-text-dim hover:bg-glass hover:text-text',
+                )}
+              >
+                <c.icon className="size-4" aria-hidden />
+              </NavLink>
+            </li>
+          )
+        })}
+      </ul>
+    )
+  }
+
+  return (
+    // ml: the guide line sits under the centre of the parent's 18px icon (px-3 + 9px).
+    <ul className="ml-[21px] mt-0.5 space-y-0.5 border-l border-border-2 py-0.5 pl-2.5" aria-label={parentLabel}>
+      {items.map((c) => {
+        const active = navState(c, pathname) !== null
+        return (
+          <li key={c.to} className="relative">
+            {active && (
+              <span className="absolute -left-[11.5px] inset-y-1 w-[2px] rounded-full bg-accent-grad" aria-hidden />
+            )}
+            <NavLink
+              to={c.to}
+              end={c.end}
+              className={cn(
+                'flex items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-[13px] font-medium transition-colors ring-focus',
+                active ? 'bg-accent-grad-soft text-text' : 'text-text-muted hover:bg-glass hover:text-text',
+              )}
+            >
+              <c.icon className={cn('size-4 shrink-0', active ? 'text-accent' : 'text-text-dim')} aria-hidden />
+              <span className="flex-1 truncate">{t(c.label)}</span>
+            </NavLink>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+/** Compact footer entry (Setup): the collapse toggle's size, with the nav's active state. */
+function FooterLink({ item, active, collapsed }: { item: NavItem; active: boolean; collapsed: boolean }) {
+  const t = useT()
+  const label = t(item.label)
+  return (
+    <NavLink
+      to={item.to}
+      title={collapsed ? label : undefined}
+      aria-label={collapsed ? label : undefined}
+      className={cn(
+        'relative flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-[13px] font-medium transition-colors ring-focus',
+        collapsed && 'justify-center px-0',
+        active ? 'bg-accent-grad-soft text-text' : 'text-text-muted hover:bg-glass hover:text-text',
+      )}
+    >
+      {active && <span className="absolute left-0 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-accent-grad" aria-hidden />}
+      <item.icon className={cn('size-[18px] shrink-0', active && 'text-accent')} aria-hidden />
+      {!collapsed && <span>{label}</span>}
+    </NavLink>
   )
 }
 

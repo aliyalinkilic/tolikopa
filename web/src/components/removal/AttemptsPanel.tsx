@@ -105,14 +105,23 @@ export function AttemptsPanel({
       header: t('common.machine'),
       sortable: true,
       sortValue: (r) => r.hostname ?? r.machine_id,
-      render: (r) => (
-        <Link
-          to={`/machines/${r.machine_id}`}
-          className="truncate font-medium text-accent hover:underline ring-focus"
-        >
-          {r.hostname || r.machine_id}
-        </Link>
-      ),
+      render: (r) =>
+        r.machine_deleted ? (
+          // Purged machine: the attempt is audit trail, there is no page to link to.
+          <span className="inline-flex items-center gap-1.5" title={t('removal.attempts.machineDeletedTitle')}>
+            <span className="truncate font-medium text-text-muted">{r.hostname || r.machine_id}</span>
+            <span className="rounded-full border border-border px-1.5 text-[11px] text-text-dim">
+              {t('removal.attempts.machineDeleted')}
+            </span>
+          </span>
+        ) : (
+          <Link
+            to={`/machines/${r.machine_id}`}
+            className="truncate font-medium text-accent hover:underline ring-focus"
+          >
+            {r.hostname || r.machine_id}
+          </Link>
+        ),
     },
     {
       key: 'item',

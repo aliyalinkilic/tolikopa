@@ -5,7 +5,8 @@ import * as ui from './en/ui'
 import * as pages from './en/pages'
 import * as setup from './en/setup'
 import { removal } from './en/removal'
+import { optimization } from './en/optimization'
 import type { Shape } from './plural'
 import type { tr } from './tr'
 
-export const en: Shape<typeof tr> = { ...core, ...ui, ...pages, ...setup, removal }
+export const en: Shape<typeof tr> = { ...core, ...ui, ...pages, ...setup, removal, optimization }

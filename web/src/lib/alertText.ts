@@ -45,8 +45,22 @@ function sustained(full: TKey, bare: TKey): Builder {
 }
 
 const BUILDERS: Record<string, Builder> = {
+  // params.kind (work-hours devices, docs/API.md §6.1): not_started (info),
+  // went_offline (warning), stale (info, long-lived). Servers send no kind.
   offline: (host, p, a) => {
     const age = seconds(p, 'age') ?? (typeof a.value === 'number' ? a.value : null)
+    const kind = str(p, 'kind')
+    if (kind === 'not_started') return translate('alertText.offlineNotStarted', { host })
+    if (kind === 'went_offline') {
+      return age === null
+        ? translate('alertText.offlineWentOfflineBare', { host })
+        : translate('alertText.offlineWentOffline', { host, duration: formatDurationSec(age) })
+    }
+    if (kind === 'stale') {
+      return age === null
+        ? translate('alertText.offlineStaleBare', { host })
+        : translate('alertText.offlineStale', { host, duration: formatDurationSec(age) })
+    }
     return age === null
       ? translate('alertText.offlineBare', { host })
       : translate('alertText.offline', { host, duration: formatDurationSec(age) })
@@ -74,8 +88,12 @@ const BUILDERS: Record<string, Builder> = {
     if (raw === null) return translate('alertText.crash_stormBare', { host })
     const count = Math.round(raw) // also selects the plural form
     const win = seconds(p, 'window')
-    return win === null
-      ? translate('alertText.crash_stormNoWindow', { host, count })
+    if (win === null) return translate('alertText.crash_stormNoWindow', { host, count })
+    // `app` (faulting process base name, most frequent in the window) is set
+    // by servers from 0019 on; almost every storm is one crash-looping app.
+    const app = str(p, 'app')
+    return app
+      ? translate('alertText.crash_stormApp', { host, app, count, duration: formatDurationSec(win) })
       : translate('alertText.crash_storm', { host, count, duration: formatDurationSec(win) })
   },
   app_crash: (host, p, a) => BUILDERS.crash_storm(host, p, a),

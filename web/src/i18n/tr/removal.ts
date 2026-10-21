@@ -179,6 +179,8 @@ export const removal = {
     outcomes: 'Sonuçlar',
     lastAction: 'Son İşlem',
     time: 'Zaman',
+    machineDeleted: 'Silindi',
+    machineDeletedTitle: 'Bu makine kalıcı olarak silindi; işlem kaydı denetim için saklanıyor.',
     action: 'İşlem',
     outcome: 'Sonuç',
     errorCode: 'Hata Kodu',

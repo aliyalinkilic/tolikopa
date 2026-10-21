@@ -159,8 +159,11 @@ func (a *API) GetRemediationImpact(c echo.Context) error {
 	rows, err := a.pool.Query(ctx, `
 		WITH removed AS (
 			SELECT machine_id, item_id, min(ts) AS removed_at
-			FROM remediation_attempt
+			FROM remediation_attempt ra
 			WHERE kind = 'app' AND outcome = 'ok' AND ts >= $2
+			  -- attempts of purged machines stay as audit trail but have no
+			  -- metrics left to compare: leave them out of the impact view
+			  AND EXISTS (SELECT 1 FROM machine pm WHERE pm.machine_id = ra.machine_id)
 			GROUP BY 1, 2
 		),
 		m AS (
@@ -247,8 +250,11 @@ func (a *API) GetRemediationImpact(c echo.Context) error {
 	irows, err := a.pool.Query(ctx, `
 		WITH removed AS (
 			SELECT machine_id, item_id, min(ts) AS removed_at
-			FROM remediation_attempt
+			FROM remediation_attempt ra
 			WHERE kind = 'app' AND outcome = 'ok' AND ts >= $2
+			  -- attempts of purged machines stay as audit trail but have no
+			  -- metrics left to compare: leave them out of the impact view
+			  AND EXISTS (SELECT 1 FROM machine pm WHERE pm.machine_id = ra.machine_id)
 			GROUP BY 1, 2
 		)
 		SELECT r.item_id, ri.display_name, count(DISTINCT r.machine_id)::int,

@@ -69,12 +69,14 @@ func (a *API) GetRemediation(c echo.Context) error {
 		SELECT ri.kind, ri.item_id, ri.family, ri.display_name, ri.category, ri.risk_tier,
 		       ri.scope, ri.safe_default, ri.process_names, ri.notes, ri.deprecated,
 		       (pi.item_id IS NOT NULL) AS selected,
-		       COALESCE(pc.n, 0)        AS present_count
+		       COALESCE(pc.n, 0)        AS present_count,
+		       COALESCE(pc.en, 0)       AS enabled_count
 		FROM remediation_item ri
 		LEFT JOIN remediation_policy_item pi
 		       ON pi.kind = ri.kind AND pi.item_id = ri.item_id
 		LEFT JOIN (
-			SELECT s.kind, s.item_id, count(*)::int AS n
+			SELECT s.kind, s.item_id, count(*)::int AS n,
+			       count(*) FILTER (WHERE s.enabled IS NOT FALSE)::int AS en
 			FROM machine_remediation_state s
 			JOIN machine m ON m.machine_id = s.machine_id AND m.archived_at IS NULL
 			WHERE s.present GROUP BY 1, 2
@@ -88,15 +90,18 @@ func (a *API) GetRemediation(c echo.Context) error {
 		var (
 			it                           model.RemediationCatalogItem
 			category, risk, scope, notes *string
-			present                      int
+			present, enabled             int
 		)
 		if err := rows.Scan(&it.Kind, &it.ItemID, &it.Family, &it.DisplayName, &category, &risk,
 			&scope, &it.SafeDefault, &it.ProcessNames, &notes, &it.Deprecated,
-			&it.Selected, &present); err != nil {
+			&it.Selected, &present, &enabled); err != nil {
 			return serverError(err)
 		}
 		it.Category, it.RiskTier, it.Scope, it.Notes = sv(category), sv(risk), sv(scope), sv(notes)
 		it.PresentCount = &present // nulled below if nobody has reported yet
+		if it.Kind == appcatalog.KindStartup {
+			it.EnabledCount = &enabled
+		}
 		if it.Kind == appcatalog.KindStartup {
 			out.Startup = append(out.Startup, it)
 		} else {
@@ -126,10 +131,16 @@ func (a *API) GetRemediation(c echo.Context) error {
 		       count(*) FILTER (WHERE remediation_reported_at IS NOT NULL
 		                          AND split_part(COALESCE(remediation_policy_revision, ''), '-', 1) = $2)::int,
 		       count(*) FILTER (WHERE remediation_reported_at IS NOT NULL
-		                          AND remediation_allowed IS NOT TRUE)::int
+		                          AND remediation_allowed IS NOT TRUE)::int,
+		       count(*) FILTER (WHERE remediation_reported_at IS NOT NULL AND remediation_allow_apps IS FALSE)::int,
+		       count(*) FILTER (WHERE remediation_reported_at IS NOT NULL AND remediation_allow_startup IS FALSE)::int,
+		       count(*) FILTER (WHERE remediation_reported_at IS NOT NULL AND remediation_enforce IS FALSE)::int,
+		       count(*) FILTER (WHERE remediation_reported_at IS NOT NULL AND remediation_enforce IS NULL)::int
 		FROM machine WHERE archived_at IS NULL AND kind <> 'linux'`, appcatalog.Version(), itoa64(pol.Revision)).
 		Scan(&out.Fleet.Machines, &out.Fleet.Reporting, &out.Fleet.CatalogStale,
-			&out.Fleet.PolicyCurrent, &out.Fleet.KillSwitchOff); err != nil {
+			&out.Fleet.PolicyCurrent, &out.Fleet.KillSwitchOff,
+			&out.Fleet.AppsNotAllowed, &out.Fleet.StartupNotAllowed,
+			&out.Fleet.EnforceOff, &out.Fleet.SwitchesUnknown); err != nil {
 		return serverError(err)
 	}
 	out.Fleet.NeverReported = out.Fleet.Machines - out.Fleet.Reporting
@@ -283,8 +294,9 @@ func (a *API) GetRemediationAttempts(c echo.Context) error {
 	itemID := strings.TrimSpace(c.QueryParam("item_id"))
 
 	rows, err := a.pool.Query(ctx, `
-		SELECT ra.ts, ra.machine_id, m.hostname, ra.kind, ra.item_id, ri.display_name,
-		       ra.action, ra.outcome, ra.error_code, ra.duration_ms, `+attemptResolvedSQL+`
+		SELECT ra.ts, ra.machine_id, `+attemptHostSQL+`, ra.kind, ra.item_id, ri.display_name,
+		       ra.action, ra.outcome, ra.error_code, ra.duration_ms, `+attemptResolvedSQL+`,
+		       m.machine_id IS NULL
 		FROM remediation_attempt ra
 		LEFT JOIN machine m          ON m.machine_id = ra.machine_id
 		LEFT JOIN remediation_item ri ON ri.kind = ra.kind AND ri.item_id = ra.item_id
@@ -377,8 +389,9 @@ func (a *API) MachineRemediation(c echo.Context) error {
 	}
 
 	arows, err := a.pool.Query(ctx, `
-		SELECT ra.ts, ra.machine_id, m.hostname, ra.kind, ra.item_id, ri.display_name,
-		       ra.action, ra.outcome, ra.error_code, ra.duration_ms, `+attemptResolvedSQL+`
+		SELECT ra.ts, ra.machine_id, `+attemptHostSQL+`, ra.kind, ra.item_id, ri.display_name,
+		       ra.action, ra.outcome, ra.error_code, ra.duration_ms, `+attemptResolvedSQL+`,
+		       m.machine_id IS NULL
 		FROM remediation_attempt ra
 		LEFT JOIN machine m           ON m.machine_id = ra.machine_id
 		LEFT JOIN remediation_item ri ON ri.kind = ra.kind AND ri.item_id = ra.item_id
@@ -405,6 +418,15 @@ func (a *API) MachineRemediation(c echo.Context) error {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+// attemptHostSQL is the attempt's hostname. remediation_attempt rows outlive a
+// purge (they are the actuation audit trail, see purge.go), so for a machine
+// that no longer exists the hostname comes from its machine_archive_audit
+// 'purge' row. Correlated on `ra` / `m` — the aliases both attempt SELECTs use.
+const attemptHostSQL = `COALESCE(m.hostname,
+		(SELECT au.hostname FROM machine_archive_audit au
+		 WHERE au.machine_id = ra.machine_id AND au.action = 'purge'
+		 ORDER BY au.ts DESC LIMIT 1))`
+
 // attemptResolvedSQL answers "did this failure later go away?" for the audit feed.
 // A failed row stays in the 365-day table forever, so without it the panel keeps
 // showing "Failed" for items a later pass removed. NULL for non-failure rows.
@@ -428,7 +450,7 @@ func scanAttempt(rows pgx.Rows) (model.RemediationAttemptDTO, error) {
 		dur              *int
 	)
 	if err := rows.Scan(&at.TS, &at.MachineID, &host, &at.Kind, &at.ItemID, &name,
-		&at.Action, &at.Outcome, &code, &dur, &at.Resolved); err != nil {
+		&at.Action, &at.Outcome, &code, &dur, &at.Resolved, &at.MachineDeleted); err != nil {
 		return at, err
 	}
 	at.Hostname, at.DisplayName, at.ErrorCode = sv(host), sv(name), sv(code)
@@ -486,6 +508,7 @@ func setPresenceDenominator(items []model.RemediationCatalogItem, reporting int)
 		items[i].ReportedCount = reporting
 		if reporting == 0 {
 			items[i].PresentCount = nil
+			items[i].EnabledCount = nil
 		}
 	}
 }

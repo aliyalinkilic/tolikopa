@@ -237,9 +237,16 @@ Routes are language-independent short English names; the old Turkish paths (`/ci
 - **Slow Machines (`/slow-machines`)**, **Users (`/users`, `/users/:user`)**,
   **Departments (`/departments`)**, **Alerts (`/alerts`)**.
 - **Settings (`/settings?tab=…`):** General (everyone: theme + language; administrator:
-  organisation name, default language, 2FA requirement) · Categories · Apps to Remove · Machines ·
+  organisation name, default language, 2FA requirement) · Categories · Machines ·
   Alert Thresholds · Panel Users (role, status, 2FA, last login; edit / disable / reset password /
   reset 2FA / delete).
+- **Optimization (`/optimization?platform=…&tab=…`, administrators only):** a Windows / Linux
+  segmented control. Windows: Overview (KPIs, local GPO switches, policy status, per-item progress,
+  per-machine posture table with filters, capability matrix) · Policy (mode + tag exclusions) ·
+  Apps (catalog) · Startup Entries (catalog, startup switch counts, startup attempts) · Results
+  (impact / open failures / audit log). One policy draft spans all Windows tabs; a sticky save bar
+  appears on any tab while it is dirty. Linux: advisory-only recommendations from collected
+  metrics, clearly badged — the Linux agent cannot act. `/settings?tab=removal` redirects here.
 - **Profile (`/profile`):** account information, password change, two-step verification, personal
   preferences, session + version.
 - **Setup (`/setup`, administrators only):** status (server address, masked ingest token, agent

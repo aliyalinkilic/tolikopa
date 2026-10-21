@@ -1,4 +1,5 @@
-// Pure helpers for the endpoint-hygiene ("Apps to Remove") settings tab.
+// Pure helpers for endpoint hygiene (the Optimization page: app removal and
+// startup entries).
 //
 // Two jobs live here:
 //   1. Normalizing the admin API payload. The backend for this feature ships in
@@ -37,6 +38,11 @@ interface FleetSummaryWire {
   catalog_stale?: number
   policy_current?: number
   kill_switch_off?: number
+  /** Per-switch break-down (server migration 0020). */
+  apps_not_allowed?: number
+  startup_not_allowed?: number
+  enforce_off?: number
+  switches_unknown?: number
 }
 
 export interface RemediationOverviewWire {
@@ -106,10 +112,12 @@ export function normalizeOverview(wire: RemediationOverviewWire): RemediationOve
       targeted_machines: posture.targeted_machines ?? fleet.machines ?? 0,
       applied_machines: posture.applied_machines ?? fleet.policy_current ?? 0,
       kill_switch_off: posture.kill_switch_off ?? fleet.kill_switch_off ?? 0,
-      // The server exposes one kill-switch count, not one per kind. Leaving these
-      // at 0 is honest: "we did not measure it", not "nobody is blocked".
-      apps_not_allowed: posture.apps_not_allowed ?? 0,
-      startup_not_allowed: posture.startup_not_allowed ?? 0,
+      // Per-kind counts arrive since server migration 0020; an older server sends
+      // none, and 0 then means "not measured", not "nobody is blocked".
+      apps_not_allowed: posture.apps_not_allowed ?? fleet.apps_not_allowed ?? 0,
+      startup_not_allowed: posture.startup_not_allowed ?? fleet.startup_not_allowed ?? 0,
+      enforce_off: posture.enforce_off ?? fleet.enforce_off ?? 0,
+      switches_unknown: posture.switches_unknown ?? fleet.switches_unknown ?? 0,
       // Not in the settings payload — RemovalSection probes the attempts feed for
       // an observed dry run instead.
       dry_run_observed: posture.dry_run_observed ?? false,
@@ -392,6 +400,11 @@ export function presenceLabel(item: RemediationCatalogItem): string {
   const count = item.present_count
   if (count === null || count === undefined) return translate('removal.presence.unknown')
   if (item.kind === 'startup') {
+    // A disabled entry is still present; "active on N" must count enabled ones.
+    if (typeof item.enabled_count === 'number') {
+      const n = item.enabled_count
+      return n === 0 ? translate('removal.presence.startupNone') : translate('removal.presence.startupSome', { count: n })
+    }
     return count === 0 ? translate('removal.presence.startupNone') : translate('removal.presence.startupSome', { count })
   }
   return count === 0 ? translate('removal.presence.appNone') : translate('removal.presence.appSome', { count })
