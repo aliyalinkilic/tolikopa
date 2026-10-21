@@ -75,8 +75,7 @@ Admin browser  ◄── React panel (live WebSocket)
    ever reaches the panel.
 5. **Verify** on one PC (`gpupdate /force`); the rest of the fleet follows by itself.
 
-Step-by-step guide: [`docs/INSTALLATION.md`](docs/INSTALLATION.md). To migrate a system installed
-under the old name ("Gozcu"): [`docs/UPGRADING.md`](docs/UPGRADING.md).
+Step-by-step guide: [`docs/INSTALLATION.md`](docs/INSTALLATION.md).
 
 ## Documentation
 

@@ -1,6 +1,4 @@
-# Named volumes are prefixed with the project name. An installation created under an
-# older project name keeps its data by setting COMPOSE_PROJECT_NAME in .env (it takes
-# precedence over this line) — see docs/UPGRADING.md.
+# Named volumes are prefixed with the project name (COMPOSE_PROJECT_NAME in .env overrides it).
 name: tolikopa
 
 # Three services. DB and API ports are NOT published to the host — only Caddy (web)

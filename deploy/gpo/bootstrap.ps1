@@ -88,44 +88,6 @@ try {
     if (-not (Test-Path $SrcExe)) { Log "ERROR: source tolikopa-agent.exe missing: $SrcExe"; exit 1 }
     Log "source tolikopa-agent.exe found"
 
-    # --- Migration: an agent installed under the product's former name, "Gozcu". ---
-    # Runs only when the old SERVICE exists: the folder existing is not enough, since
-    # any user can create it. The only thing carried over is the machine identity
-    # (state\agent_id), so the machine does not show up as a new device in the panel;
-    # the unsent queue is not moved. If the old GPO is still in place its task
-    # reinstalls the old agent; see docs/UPGRADING.md.
-    $LegacyName = 'Gozcu'
-    $LegacyDir  = Join-Path $env:ProgramData $LegacyName
-    $legacySvc  = Get-Service -Name $LegacyName -ErrorAction SilentlyContinue
-    if ($legacySvc) {
-        Log "legacy install found - migrating"
-        $legacyTrusted = (Test-Path -LiteralPath $LegacyDir) -and -not (Is-Link $LegacyDir) -and (Trusted-Owner $LegacyDir)
-        if ($legacySvc.Status -ne 'Stopped') {
-            Stop-Service -Name $LegacyName -Force -ErrorAction SilentlyContinue
-            try { (Get-Service $LegacyName).WaitForStatus('Stopped', '00:00:30') } catch {}
-        }
-        & sc.exe delete $LegacyName *> $null
-        try { Unregister-ScheduledTask -TaskName ($LegacyName + 'Agent') -Confirm:$false -ErrorAction Stop } catch {}
-
-        if ($legacyTrusted) {
-            $oldId = Join-Path $LegacyDir 'state\agent_id'
-            $newState = Join-Path $DestDir 'state'
-            $newId = Join-Path $newState 'agent_id'
-            if ((Test-Path -LiteralPath $oldId -PathType Leaf) -and -not (Test-Path -LiteralPath $newId) `
-                    -and -not (Is-Link $oldId) -and (Trusted-Owner $oldId) -and ((Get-Item -LiteralPath $oldId).Length -le 64)) {
-                $id = ([IO.File]::ReadAllText($oldId)).Trim()
-                if ($id -match '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$') {
-                    Ensure-Dir $newState
-                    [IO.File]::WriteAllText($newId, $id)
-                    Log "machine identity migrated"
-                }
-            }
-            Remove-Tree $LegacyDir
-            Log "legacy install removed"
-        }
-        else { Log "legacy folder not trusted - left untouched" }
-    }
-
     # Copy tolikopa-agent.exe to the local disk first (hashing over the network as SYSTEM can stall).
     Log "copying tolikopa-agent.exe locally"
     Copy-Item $SrcExe $StageExe -Force
