@@ -233,7 +233,7 @@ Routes are language-independent short English names; the old Turkish paths (`/ci
 - **Overview (`/`):** 4 KpiCards on top → fleet trend, attention cards, event feed, busy hours.
 - **Devices (`/devices`):** KPIs + filters + MachineCard grid.
 - **Machine Details (`/machines/:id`):** identity + live RingGauges → tabs: Metrics / Apps /
-  Categories / Sessions / Alerts / Remote Management.
+  Categories / Sessions / Alerts.
 - **Slow Machines (`/slow-machines`)**, **Users (`/users`, `/users/:user`)**,
   **Departments (`/departments`)**, **Alerts (`/alerts`)**.
 - **Settings (`/settings?tab=…`):** General (everyone: theme + language; administrator:

@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ChevronsUpDown } from 'lucide-react'
+import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { EmptyState } from './EmptyState'
+import { Pager } from './Pager'
 import { Inbox } from 'lucide-react'
 import { useT } from '@/i18n'
 import { compareText } from '@/lib/format'
@@ -90,8 +91,6 @@ export function DataTable<T>({
   const safePage = Math.min(page, pageCount)
   const visibleRows = size > 0 ? sorted.slice((safePage - 1) * size, safePage * size) : sorted
   const showPager = size > 0 && sorted.length > size
-  const rangeStart = sorted.length === 0 ? 0 : (safePage - 1) * size + 1
-  const rangeEnd = size > 0 ? Math.min(safePage * size, sorted.length) : sorted.length
 
   // Keep the pager where it is on a short last page: remember how tall a full
   // page rendered and hold that height as a minimum while paging.
@@ -104,8 +103,6 @@ export function DataTable<T>({
     setFullHeight((prev) => (prev === h ? prev : h))
   })
   // Digit-stable widths for the counters, so "9 / 12" → "10 / 12" does not nudge the buttons.
-  const totalDigits = String(sorted.length).length
-  const pageDigits = String(pageCount).length
 
   const toggleSort = (key: string) => {
     setSort((prev) => {
@@ -213,43 +210,7 @@ export function DataTable<T>({
   return (
     <div className="space-y-3">
       {table}
-      <div className={cn('flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-1 text-[12px] text-text-muted', pagerClassName)}>
-        <span
-          className="tabular whitespace-nowrap"
-          style={{ minWidth: `${totalDigits * 3 + 4}ch` }}
-          aria-live="polite"
-        >
-          {rangeStart}–{rangeEnd} / {sorted.length}
-        </span>
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={safePage <= 1}
-            aria-label={t('ui.table.prevPage')}
-            className="inline-flex items-center gap-1 whitespace-nowrap rounded-[9px] border border-border-2 bg-surface/60 px-2.5 py-1 font-medium text-text-muted transition-colors hover:text-text disabled:pointer-events-none disabled:opacity-40 ring-focus"
-          >
-            <ChevronLeft className="size-3.5" aria-hidden />
-            <span className="hidden sm:inline">{t('ui.table.prev')}</span>
-          </button>
-          <span
-            className="tabular whitespace-nowrap px-1.5 text-center text-text-dim"
-            style={{ minWidth: `${pageDigits * 2 + 3}ch` }}
-          >
-            {safePage} / {pageCount}
-          </span>
-          <button
-            type="button"
-            onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
-            disabled={safePage >= pageCount}
-            aria-label={t('ui.table.nextPage')}
-            className="inline-flex items-center gap-1 whitespace-nowrap rounded-[9px] border border-border-2 bg-surface/60 px-2.5 py-1 font-medium text-text-muted transition-colors hover:text-text disabled:pointer-events-none disabled:opacity-40 ring-focus"
-          >
-            <span className="hidden sm:inline">{t('ui.table.next')}</span>
-            <ChevronRight className="size-3.5" aria-hidden />
-          </button>
-        </div>
-      </div>
+      <Pager page={safePage} pageSize={size} total={sorted.length} onPage={setPage} className={pagerClassName} />
     </div>
   )
 }

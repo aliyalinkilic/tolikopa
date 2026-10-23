@@ -2,9 +2,9 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
-  Activity, AppWindow, Archive, ArchiveRestore, Battery, BatteryCharging, BellRing, Check, ChevronLeft, Clock, Copy, Cpu, Download,
-  HardDrive, Info, Pencil, PieChart as PieIcon, Plug, Plus, Power, RefreshCw, Save,
-  ServerCrash, ShieldAlert, ShieldCheck, Tag, Terminal, TriangleAlert, X,
+  AppWindow, Archive, ArchiveRestore, Battery, BatteryCharging, BellRing, ChevronLeft, Clock, Cpu, Download,
+  HardDrive, Info, Pencil, PieChart as PieIcon, Plug, Plus, RefreshCw, Save,
+  ServerCrash, ShieldCheck, Tag, TriangleAlert, X,
 } from 'lucide-react'
 import { Tabs } from '@/components/ui/Tabs'
 import { Card, CardHeader } from '@/components/ui/Card'
@@ -43,10 +43,9 @@ import {
 } from '@/lib/format'
 import type { EventDTO, MachineDetail as MachineDetailDTO, NetPoint, SeriesPoint, TopProcess } from '@/lib/types'
 import { translate, useT } from '@/i18n'
-import { Trans } from '@/i18n/rich'
 import { sameText } from '@/lib/format'
 
-type TabKey = 'metrics' | 'apps' | 'categories' | 'sessions' | 'alerts' | 'remote'
+type TabKey = 'metrics' | 'apps' | 'categories' | 'sessions' | 'alerts'
 
 const round1 = (n: number) => Math.round(n * 10) / 10
 
@@ -75,9 +74,6 @@ export function MachineDetail() {
   const diskUsed = 100 - (machine.disk_min_free_pct ?? 100)
   const tags = machine.tags ?? []
   const isLinux = machine.kind === 'linux'
-  // The remote tab is Windows-only (WinRM/PowerShell, GPO, RDP); a Linux host has
-  // nothing it could offer.
-  const showRemote = isAdmin && !isLinux
 
   const tabs = [
     { key: 'metrics', label: t('machine.tabMetrics'), icon: <Cpu className="size-4" aria-hidden /> },
@@ -85,10 +81,6 @@ export function MachineDetail() {
     { key: 'categories', label: t('machine.tabCategories'), icon: <PieIcon className="size-4" aria-hidden /> },
     { key: 'sessions', label: t('machine.tabSessions'), icon: <Clock className="size-4" aria-hidden /> },
     { key: 'alerts', label: t('machine.tabAlerts'), icon: <BellRing className="size-4" aria-hidden /> },
-    // Remote-management commands are an admin-only convenience surface.
-    ...(showRemote
-      ? [{ key: 'remote', label: t('machine.tabRemote'), icon: <Terminal className="size-4" aria-hidden /> }]
-      : []),
   ]
 
   return (
@@ -191,7 +183,7 @@ export function MachineDetail() {
           ariaLabel={t('machine.tabsLabel')}
           className="w-full sm:w-auto"
         />
-        {tab !== 'alerts' && tab !== 'remote' && (
+        {tab !== 'alerts' && (
           <RangeSelector value={rangeKey} onChange={setRange} custom={custom} onCustomChange={setCustom} />
         )}
       </div>
@@ -201,7 +193,6 @@ export function MachineDetail() {
       {tab === 'categories' && id && <CategoriesTab id={id} win={win} />}
       {tab === 'sessions' && id && <SessionsTab id={id} win={win} />}
       {tab === 'alerts' && id && <AlertsTab id={id} win={win} showEvents={!isLinux} />}
-      {tab === 'remote' && showRemote && <RemoteTab hostname={machine.hostname} />}
 
       {isAdmin && id && (
         <MachineTagEditor
@@ -776,6 +767,7 @@ function AlertsTab({ id, win, showEvents }: { id: string; win: { from: string; t
               onAck={(alertId) => ack.mutate(alertId)}
               ackingId={ack.isPending ? (ack.variables ?? null) : null}
               showMachine={false}
+              pageSize={15}
             />
           )}
         </div>
@@ -821,207 +813,6 @@ function EventList({ events }: { events: EventDTO[] }) {
         )
       })}
     </ul>
-  )
-}
-
-// ── Remote-management tab (admin) ─────────────────────────────────────────────
-// SAFETY / DESIGN NOTE: this tab renders ready-to-run, hostname-prefilled
-// PowerShell one-liners that the admin COPIES and runs from their OWN elevated
-// workstation (Kerberos-authenticated, WinRM, fully audited by AD). NOTHING here
-// executes through the Tolikopa agent or the panel — by design the agent has no
-// inbound command channel, so the panel can never be an RCE surface for the fleet.
-type Cmd = { label: string; desc: string; code: string; danger?: boolean; note?: string }
-type CmdGroup = { title: string; icon: ReactNode; hint?: string; cmds: Cmd[] }
-
-function remoteGroups(host: string): CmdGroup[] {
-  const h = host || translate('machine.hostPlaceholder')
-  const ic = (c: string) => `Invoke-Command -ComputerName '${h}' -ScriptBlock { ${c} }`
-  return [
-    {
-      title: translate('machine.updatesTitle'),
-      icon: <Download className="size-4" aria-hidden />,
-      hint: translate('machine.remote.updatesHint'),
-      cmds: [
-        {
-          label: translate('machine.remote.listPending'),
-          desc: translate('machine.remote.listPendingDesc'),
-          code: ic(`(New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher().Search("IsInstalled=0 AND IsHidden=0").Updates | Select-Object Title`),
-        },
-        {
-          label: translate('machine.remote.scan'),
-          desc: translate('machine.remote.scanDesc'),
-          code: ic(`UsoClient StartInteractiveScan`),
-        },
-        {
-          label: translate('machine.remote.install'),
-          desc: translate('machine.remote.installDesc'),
-          code: ic(`Install-WindowsUpdate -AcceptAll -IgnoreReboot`),
-          note: translate('machine.remote.installNote'),
-        },
-      ],
-    },
-    {
-      title: translate('machine.remote.gpoTitle'),
-      icon: <RefreshCw className="size-4" aria-hidden />,
-      hint: translate('machine.remote.gpoHint'),
-      cmds: [
-        {
-          label: translate('machine.remote.gpupdate'),
-          desc: translate('machine.remote.gpupdateDesc'),
-          code: ic(`gpupdate /force`),
-        },
-        {
-          label: translate('machine.remote.gpupdateRsat'),
-          desc: translate('machine.remote.gpupdateRsatDesc'),
-          code: `Invoke-GPUpdate -Computer '${h}' -Force`,
-        },
-      ],
-    },
-    {
-      title: translate('machine.remote.diagTitle'),
-      icon: <Activity className="size-4" aria-hidden />,
-      cmds: [
-        {
-          label: translate('machine.remote.sysSummary'),
-          desc: translate('machine.remote.sysSummaryDesc'),
-          code: ic(`Get-ComputerInfo -Property CsName,OsName,OsVersion,OsLastBootUpTime`),
-        },
-        {
-          label: translate('machine.remote.diskFree'),
-          desc: translate('machine.remote.diskFreeDesc'),
-          code: ic(`Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}},@{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}}`),
-        },
-        {
-          label: translate('machine.remote.agentStatus'),
-          desc: translate('machine.remote.agentStatusDesc'),
-          code: ic(`Get-Service Tolikopa | Select-Object Status,StartType`),
-        },
-      ],
-    },
-    {
-      title: translate('machine.remote.maintTitle'),
-      icon: <Power className="size-4" aria-hidden />,
-      cmds: [
-        {
-          label: translate('machine.remote.agentRestart'),
-          desc: translate('machine.remote.agentRestartDesc'),
-          code: ic(`Restart-Service Tolikopa`),
-        },
-        {
-          label: translate('machine.remote.flushDns'),
-          desc: translate('machine.remote.flushDnsDesc'),
-          code: ic(`Clear-DnsClientCache`),
-        },
-        {
-          label: translate('machine.remote.restart'),
-          desc: translate('machine.remote.restartDesc'),
-          code: `Restart-Computer -ComputerName '${h}' -Force`,
-          danger: true,
-        },
-        {
-          label: translate('machine.remote.rdp'),
-          desc: translate('machine.remote.rdpDesc'),
-          code: `mstsc /v:${h}`,
-        },
-      ],
-    },
-    {
-      title: translate('machine.remote.genericTitle'),
-      icon: <Terminal className="size-4" aria-hidden />,
-      cmds: [
-        {
-          label: translate('machine.remote.generic'),
-          desc: translate('machine.remote.genericDesc'),
-          code: ic(translate('machine.remote.genericComment')),
-        },
-      ],
-    },
-  ]
-}
-
-function useCopy() {
-  const [copied, setCopied] = useState<string | null>(null)
-  const copy = async (text: string, id: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(id)
-      window.setTimeout(() => setCopied((c) => (c === id ? null : c)), 1600)
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
-  return { copied, copy }
-}
-
-function RemoteTab({ hostname }: { hostname: string }) {
-  const t = useT()
-  const { copied, copy } = useCopy()
-  const groups = remoteGroups(hostname)
-  return (
-    <div className="space-y-5">
-      <div className="flex items-start gap-3 rounded-[var(--radius-md)] border border-accent/20 bg-accent/[0.06] p-4">
-        <Info className="mt-0.5 size-5 shrink-0 text-accent" aria-hidden />
-        <div className="text-[13px] leading-relaxed text-text-muted">
-          <p className="font-semibold text-text">{t('machine.remote.introTitle')}</p>
-          <p className="mt-1">
-            <Trans
-              k="machine.remote.introBody"
-              values={{ host: hostname }}
-              tags={{ m: (c) => <span className="font-mono text-text">{c}</span>, b: (c) => <span className="font-medium text-text">{c}</span> }}
-            />
-          </p>
-          <p className="mt-1.5 text-[12px] text-text-dim">
-            <Trans k="machine.remote.introReq" tags={{ m: (c) => <span className="font-mono">{c}</span> }} />
-          </p>
-        </div>
-      </div>
-
-      {groups.map((g) => (
-        <Card key={g.title}>
-          <div className="flex items-center gap-2 text-[14px] font-semibold text-text">
-            <span className="grid size-7 place-items-center rounded-[9px] bg-surface-2 text-accent">{g.icon}</span>
-            {g.title}
-          </div>
-          {g.hint && <p className="mt-1.5 text-[12px] text-text-dim">{g.hint}</p>}
-          <div className="mt-4 space-y-4">
-            {g.cmds.map((cmd) => (
-              <CommandCard key={cmd.label} cmd={cmd} copied={copied} onCopy={copy} />
-            ))}
-          </div>
-        </Card>
-      ))}
-    </div>
-  )
-}
-
-function CommandCard({ cmd, copied, onCopy }: { cmd: Cmd; copied: string | null; onCopy: (text: string, id: string) => void }) {
-  const t = useT()
-  return (
-    <div>
-      <div className="flex items-center gap-2">
-        <span className="text-[13px] font-medium text-text">{cmd.label}</span>
-        {cmd.danger && <Badge tone="crit" icon={<ShieldAlert className="size-3" aria-hidden />}>{t('machine.remote.caution')}</Badge>}
-      </div>
-      <p className="mt-0.5 text-[12px] text-text-muted">{cmd.desc}</p>
-      <div className="relative mt-2">
-        <pre className="overflow-x-auto rounded-[var(--radius-md)] border border-border bg-code p-3.5 pr-12 text-[12.5px] leading-relaxed">
-          <code className="font-mono whitespace-pre text-text-muted">{cmd.code}</code>
-        </pre>
-        <button
-          type="button"
-          onClick={() => onCopy(cmd.code, cmd.label)}
-          aria-label={t('machine.remote.copyCommand')}
-          className="absolute right-2 top-2 grid size-8 place-items-center rounded-[9px] border border-border-2 bg-surface-2/80 text-text-muted transition-colors hover:text-text ring-focus"
-        >
-          {copied === cmd.label ? <Check className="size-4 text-ok" aria-hidden /> : <Copy className="size-4" aria-hidden />}
-        </button>
-      </div>
-      {cmd.note && (
-        <p className="mt-1.5 flex items-start gap-1.5 text-[11.5px] text-text-dim">
-          <Info className="mt-px size-3.5 shrink-0" aria-hidden /> {cmd.note}
-        </p>
-      )}
-    </div>
   )
 }
 

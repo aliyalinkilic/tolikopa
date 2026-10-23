@@ -1,9 +1,11 @@
+import { useState } from 'react'
 import { Check, Info, ShieldAlert, TriangleAlert } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Badge } from './ui/Badge'
 import { Button } from './ui/Button'
 import { EmptyState } from './EmptyState'
+import { Pager } from './Pager'
 import { alertStatusLabel, ruleLabel, severityLabel, severityToken, statusColor } from '@/lib/labels'
 import type { StatusToken } from '@/lib/labels'
 import { alertMessage } from '@/lib/alertText'
@@ -31,17 +33,26 @@ interface AlertListProps {
   ackingId?: number | null
   showMachine?: boolean
   emptyLabel?: string
+  /** When set, show one page of alerts at a time with a pager below. */
+  pageSize?: number
 }
 
-export function AlertList({ alerts, onAck, ackingId, showMachine = true, emptyLabel }: AlertListProps) {
+export function AlertList({ alerts, onAck, ackingId, showMachine = true, emptyLabel, pageSize }: AlertListProps) {
   const t = useT()
+  const [page, setPage] = useState(1)
   if (alerts.length === 0) {
     return <EmptyState icon={Check} title={emptyLabel ?? t('ui.alertList.none')} description={t('ui.alertList.allGood')} />
   }
 
-  return (
+  const size = pageSize ?? 0
+  const pageCount = size > 0 ? Math.max(1, Math.ceil(alerts.length / size)) : 1
+  // Clamp rather than reset: an ack or a refetch can shorten the list under the reader.
+  const safePage = Math.min(page, pageCount)
+  const visible = size > 0 ? alerts.slice((safePage - 1) * size, safePage * size) : alerts
+
+  const list = (
     <ul className="divide-y divide-border">
-      {alerts.map((a) => {
+      {visible.map((a) => {
         const tone = severityToken(a.severity)
         const Icon = severityIcon[tone]
         const color = statusColor[tone]
@@ -94,5 +105,13 @@ export function AlertList({ alerts, onAck, ackingId, showMachine = true, emptyLa
         )
       })}
     </ul>
+  )
+
+  if (size === 0 || alerts.length <= size) return list
+  return (
+    <div className="space-y-4">
+      {list}
+      <Pager page={safePage} pageSize={size} total={alerts.length} onPage={setPage} />
+    </div>
   )
 }
